@@ -24,7 +24,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/silicon_river.db")
 def _extract_sqlite_path(url: str) -> Path:
     if url.startswith("sqlite:///"):
         relative_path = url.replace("sqlite:///", "")
-        return (BASE_DIR.parent / relative_path).resolve()
+        return (BASE_DIR / relative_path).resolve()
     raise ValueError("Only sqlite:/// paths are supported by the default backend service.")
 
 
