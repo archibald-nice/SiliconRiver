@@ -1,2 +1,29 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.sqlite3-journal
+
+# Virtual environments
+.venv/
+.env
+# .env.*
+
+# Data artefacts
+/data/
+*.db
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Builds / coverage
+htmlcov/
+.coverage
+.pytest_cache/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+
 /docs
-/.venv
