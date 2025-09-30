@@ -26,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "data"
 DEFAULT_DB_PATH = DATA_DIR / "silicon_river.db"
 ENV_PATH = BASE_DIR / ".env"
+TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 @dataclass(slots=True)
@@ -69,12 +70,16 @@ def hf_client() -> HfApi:
     return HfApi(token=token)
 
 
-def normalise_datetime(value: datetime | None) -> str:
+def normalise_datetime(value: datetime | None) -> datetime:
     if value is None:
         value = datetime.now(timezone.utc)
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat()
+    return value.astimezone(timezone.utc)
+
+
+def format_timestamp(value: datetime | None) -> str:
+    return normalise_datetime(value).strftime(TIMESTAMP_FORMAT)
 
 
 def to_record(provider: str, info: ModelInfo) -> ModelRecord:
@@ -84,8 +89,8 @@ def to_record(provider: str, info: ModelInfo) -> ModelRecord:
     if not description and fallback_description:
         description = str(fallback_description)
     tags = list(getattr(info, "tags", []) or [])
-    created_at = normalise_datetime(getattr(info, "created_at", None) or getattr(info, "lastModified", None))
-    inserted_at = datetime.now(timezone.utc).isoformat()
+    created_at = format_timestamp(getattr(info, "created_at", None) or getattr(info, "lastModified", None))
+    inserted_at = format_timestamp(datetime.now(timezone.utc))
     downloads = getattr(info, "downloads", None)
     likes = getattr(info, "likes", None)
 
