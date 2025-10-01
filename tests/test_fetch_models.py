@@ -1,10 +1,15 @@
-﻿import sqlite3
+import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 
 from src.scraper import fetch_models as fm
+
+TEST_DB_URL = os.getenv("TEST_DATABASE_URL")
+if not TEST_DB_URL:
+    pytest.skip("TEST_DATABASE_URL is not set; skipping PostgreSQL-dependent tests.", allow_module_level=True)
 
 
 def _make_model(model_id: str, *, created_at: datetime | None = None, tags=None, description: str = ""):
@@ -21,11 +26,17 @@ def _make_model(model_id: str, *, created_at: datetime | None = None, tags=None,
     )
 
 
-def test_fetch_and_store_inserts(monkeypatch, tmp_path):
-    db_path = tmp_path / "silicon_river.db"
+def _reset_database() -> None:
+    with psycopg.connect(TEST_DB_URL) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("TRUNCATE TABLE sync_log, models RESTART IDENTITY")
+        conn.commit()
+
+
+def test_fetch_and_store_inserts(monkeypatch):
     monkeypatch.setenv("PROVIDERS", "meta-llama")
     monkeypatch.setenv("HF_TOKEN", "dummy")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
+    monkeypatch.setenv("DATABASE_URL", TEST_DB_URL)
 
     models = [
         _make_model("meta-llama/Llama-1", description="Model one"),
@@ -39,18 +50,24 @@ def test_fetch_and_store_inserts(monkeypatch, tmp_path):
 
     monkeypatch.setattr(fm, "hf_client", lambda: FakeClient())
 
+    fm.create_schema(TEST_DB_URL)
+    _reset_database()
+
     results = fm.fetch_and_store(limit=10)
 
     assert results == {"meta-llama": (3, 2)}
 
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute("SELECT model_id, description FROM models ORDER BY model_id").fetchall()
-        assert len(rows) == 2
-        assert rows[0][0] == "meta-llama/Llama-1"
-        assert "Model one" in rows[0][1]
+    with psycopg.connect(TEST_DB_URL) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT model_id, description FROM models ORDER BY model_id")
+            rows = cursor.fetchall()
+            assert len(rows) == 2
+            assert rows[0][0] == "meta-llama/Llama-1"
+            assert "Model one" in rows[0][1]
 
-        sync_rows = conn.execute("SELECT processed, inserted FROM sync_log").fetchall()
-        assert sync_rows == [(3, 2)]
+            cursor.execute("SELECT processed, inserted FROM sync_log")
+            sync_rows = cursor.fetchall()
+            assert sync_rows == [(3, 2)]
 
 
 @pytest.mark.parametrize("raw, expected", [
@@ -60,3 +77,4 @@ def test_fetch_and_store_inserts(monkeypatch, tmp_path):
 ])
 def test_get_providers(raw, expected):
     assert fm.get_providers(raw) == expected
+

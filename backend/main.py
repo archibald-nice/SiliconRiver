@@ -3,36 +3,27 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from pathlib import Path
 from typing import List, Optional
 
+import psycopg
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from psycopg.rows import dict_row
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-ENV_PATH = BASE_DIR.parent / ".env"
+ENV_PATH = BASE_DIR / ".env"
 
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH, override=False)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/silicon_river.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://USER:PASSWORD@HOST:5432/silicon_river")
 
 
-def _extract_sqlite_path(url: str) -> Path:
-    if url.startswith("sqlite:///"):
-        relative_path = url.replace("sqlite:///", "")
-        return (BASE_DIR / relative_path).resolve()
-    raise ValueError("Only sqlite:/// paths are supported by the default backend service.")
-
-
-def get_connection() -> sqlite3.Connection:
-    db_path = _extract_sqlite_path(DATABASE_URL)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+def get_connection() -> psycopg.Connection:
+    conn = psycopg.connect(DATABASE_URL)
     return conn
 
 
@@ -84,35 +75,40 @@ async def list_models(
     provider: Optional[str] = None,
     tag: Optional[str] = None,
     search: Optional[str] = None,
-    conn: sqlite3.Connection = Depends(get_db),
+    conn: psycopg.Connection = Depends(get_db),
 ):
     offset = (page - 1) * page_size
-    filters = []
+    filters: List[str] = []
     params: List[object] = []
 
     if provider:
-        filters.append("provider = ?")
+        filters.append("provider = %s")
         params.append(provider)
     if tag:
-        filters.append("tags LIKE ?")
+        filters.append("tags ILIKE %s")
         params.append(f"%{tag}%")
     if search:
-        filters.append("(model_name LIKE ? OR description LIKE ?)")
+        filters.append("(model_name ILIKE %s OR description ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
 
-    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
 
-    total = conn.execute(f"SELECT COUNT(*) FROM models {where_clause}", params).fetchone()[0]
-    rows = conn.execute(
-        f"""
-        SELECT model_id, provider, model_name, description, tags, created_at, downloads, likes, model_card_url
-        FROM models
-        {where_clause}
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-        """,
-        [*params, page_size, offset],
-    ).fetchall()
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(f"SELECT COUNT(*) AS total FROM models{where_clause}", params)
+        total_row = cursor.fetchone()
+        total = int(total_row["total"]) if total_row else 0
+
+        cursor.execute(
+            f"""
+            SELECT model_id, provider, model_name, description, tags, created_at, downloads, likes, model_card_url
+            FROM models
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT %s OFFSET %s
+            """,
+            [*params, page_size, offset],
+        )
+        rows = cursor.fetchall()
 
     items = [
         Model(
@@ -133,15 +129,17 @@ async def list_models(
 
 
 @app.get("/api/models/{model_id}", response_model=Model)
-async def get_model(model_id: str, conn: sqlite3.Connection = Depends(get_db)):
-    row = conn.execute(
-        """
-        SELECT model_id, provider, model_name, description, tags, created_at, downloads, likes, model_card_url
-        FROM models
-        WHERE model_id = ?
-        """,
-        [model_id],
-    ).fetchone()
+async def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT model_id, provider, model_name, description, tags, created_at, downloads, likes, model_card_url
+            FROM models
+            WHERE model_id = %s
+            """,
+            [model_id],
+        )
+        row = cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
     return Model(
@@ -158,15 +156,17 @@ async def get_model(model_id: str, conn: sqlite3.Connection = Depends(get_db)):
 
 
 @app.get("/api/stats/providers", response_model=List[ProviderStat])
-async def provider_stats(conn: sqlite3.Connection = Depends(get_db)):
-    rows = conn.execute(
-        """
-        SELECT provider, COUNT(*) as model_count
-        FROM models
-        GROUP BY provider
-        ORDER BY model_count DESC
-        """
-    ).fetchall()
+async def provider_stats(conn: psycopg.Connection = Depends(get_db)):
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT provider, COUNT(*) as model_count
+            FROM models
+            GROUP BY provider
+            ORDER BY model_count DESC
+            """
+        )
+        rows = cursor.fetchall()
     return [ProviderStat(provider=row["provider"], model_count=row["model_count"]) for row in rows]
 
 
@@ -185,3 +185,4 @@ def _parse_tags(raw: Optional[str]) -> List[str]:
 @app.get("/health")
 async def healthcheck():
     return {"status": "ok"}
+
