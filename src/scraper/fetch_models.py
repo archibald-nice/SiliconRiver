@@ -1,15 +1,15 @@
-﻿"""Fetch Hugging Face models and persist them into SQLite."""
+"""Fetch Hugging Face models and persist them into PostgreSQL."""
 from __future__ import annotations
 
 import json
 import logging
 import os
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
 
+import psycopg
 from dotenv import load_dotenv
 from huggingface_hub import HfApi, ModelInfo
 
@@ -23,9 +23,8 @@ LOGGING_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOGGING_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s")
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-DATA_DIR = BASE_DIR / "data"
-DEFAULT_DB_PATH = DATA_DIR / "silicon_river.db"
 ENV_PATH = BASE_DIR / ".env"
+DEFAULT_DB_URL = "postgresql://USER:PASSWORD@HOST:5432/silicon_river"
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -48,12 +47,9 @@ def load_config() -> None:
         load_dotenv(dotenv_path=ENV_PATH, override=False)
 
 
-def resolve_db_path() -> Path:
+def resolve_db_url() -> str:
     load_config()
-    url = os.getenv("DATABASE_URL")
-    if url and url.startswith("sqlite:///"):
-        return BASE_DIR / url.replace("sqlite:///", "")
-    return DEFAULT_DB_PATH
+    return os.getenv("DATABASE_URL", DEFAULT_DB_URL)
 
 
 def get_providers(raw: str | None) -> list[str]:
@@ -108,62 +104,59 @@ def to_record(provider: str, info: ModelInfo) -> ModelRecord:
     )
 
 
-def ensure_db(path: Path | None = None) -> sqlite3.Connection:
-    db_path = path or resolve_db_path()
+def ensure_db(url: str | None = None) -> psycopg.Connection:
+    db_url = url or resolve_db_url()
     if create_schema is not None:
-        create_schema(db_path)
-    else:  # pragma: no cover
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+        create_schema(db_url)
+    conn = psycopg.connect(db_url)
     return conn
 
 
-def save_models(conn: sqlite3.Connection, provider: str, records: Iterable[ModelRecord], *, started_at: datetime) -> tuple[int, int]:
-    cursor = conn.cursor()
+def save_models(conn: psycopg.Connection, provider: str, records: Iterable[ModelRecord], *, started_at: datetime) -> tuple[int, int]:
     processed = 0
     inserted = 0
-    for record in records:
-        processed += 1
+    with conn.cursor() as cursor:
+        for record in records:
+            processed += 1
+            cursor.execute(
+                """
+                INSERT INTO models (
+                    model_id, provider, model_name, description, tags,
+                    created_at, downloads, likes, model_card_url, inserted_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (model_id) DO NOTHING
+                """,
+                (
+                    record.model_id,
+                    record.provider,
+                    record.model_name,
+                    record.description,
+                    json.dumps(record.tags, ensure_ascii=False),
+                    record.created_at,
+                    record.downloads,
+                    record.likes,
+                    record.model_card_url,
+                    record.inserted_at,
+                ),
+            )
+            if cursor.rowcount:
+                inserted += 1
+        finished_at = datetime.now(timezone.utc)
         cursor.execute(
             """
-            INSERT OR IGNORE INTO models (
-                model_id, provider, model_name, description, tags,
-                created_at, downloads, likes, model_card_url, inserted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sync_log (provider, started_at, finished_at, status, processed, inserted, error_message)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                record.model_id,
-                record.provider,
-                record.model_name,
-                record.description,
-                json.dumps(record.tags, ensure_ascii=False),
-                record.created_at,
-                record.downloads,
-                record.likes,
-                record.model_card_url,
-                record.inserted_at,
+                provider,
+                started_at.isoformat(),
+                finished_at.isoformat(),
+                "success",
+                processed,
+                inserted,
+                None,
             ),
         )
-        if cursor.rowcount:
-            inserted += 1
-    conn.commit()
-    finished_at = datetime.now(timezone.utc)
-    cursor.execute(
-        """
-        INSERT INTO sync_log (provider, started_at, finished_at, status, processed, inserted, error_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            provider,
-            started_at.isoformat(),
-            finished_at.isoformat(),
-            "success",
-            processed,
-            inserted,
-            None,
-        ),
-    )
     conn.commit()
     return processed, inserted
 
@@ -197,3 +190,4 @@ if __name__ == "__main__":
     summary = fetch_and_store()
     for provider, (processed, inserted) in summary.items():
         print(f"{provider}: processed={processed} inserted={inserted}")
+
