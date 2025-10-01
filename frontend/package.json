@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "silicon-river-frontend",
   "version": "0.1.0",
   "private": true,
@@ -8,7 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@headlessui/react": "^1.7.21",
+    "@headlessui/react": "^1.7.19",
     "@heroicons/react": "^2.1.5",
     "@tanstack/react-query": "^5.51.1",
     "axios": "^1.7.7",
