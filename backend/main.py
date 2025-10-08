@@ -1,8 +1,9 @@
-﻿"""FastAPI application exposing Silicon River data."""
+"""FastAPI application exposing Silicon River data."""
 from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
@@ -49,6 +50,27 @@ class ModelList(BaseModel):
 class ProviderStat(BaseModel):
     provider: str
     model_count: int
+
+
+class TimelineModel(BaseModel):
+    model_id: str
+    provider: str
+    model_name: str
+    description: Optional[str]
+    created_at: str
+    model_card_url: str
+    tags: List[str]
+
+
+class TimelineResponse(BaseModel):
+    items: List[TimelineModel]
+    total: int
+    page: int
+    page_size: int
+    start: str
+    end: str
+    preset: str
+    label: str
 
 
 app = FastAPI(title="Silicon River API", version="0.1.0")
@@ -155,6 +177,70 @@ async def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
     )
 
 
+@app.get("/api/timeline", response_model=TimelineResponse)
+async def timeline_models(
+    preset: str = Query("30d", regex="^(30d|6m|1y)"),
+    year: Optional[int] = Query(None, ge=1900, le=3000),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=10, le=500),
+    sort: str = Query("asc", regex="^(asc|desc)"),
+    conn: psycopg.Connection = Depends(get_db),
+):
+    start_dt, end_dt, label = _calculate_timeline_window(preset=preset, year=year)
+    start = start_dt.isoformat()
+    end = end_dt.isoformat()
+    order_clause = "ASC" if sort == "asc" else "DESC"
+    offset = (page - 1) * page_size
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM models
+            WHERE created_at BETWEEN %s AND %s
+            """,
+            [start, end],
+        )
+        total_row = cursor.fetchone()
+        total = int(total_row["total"]) if total_row else 0
+
+        cursor.execute(
+            f"""
+            SELECT model_id, provider, model_name, description, tags, created_at, model_card_url
+            FROM models
+            WHERE created_at BETWEEN %s AND %s
+            ORDER BY created_at {order_clause}
+            LIMIT %s OFFSET %s
+            """,
+            [start, end, page_size, offset],
+        )
+        rows = cursor.fetchall()
+
+    items = [
+        TimelineModel(
+            model_id=row["model_id"],
+            provider=row["provider"],
+            model_name=row["model_name"],
+            description=row["description"],
+            created_at=row["created_at"],
+            model_card_url=row["model_card_url"],
+            tags=_parse_tags(row["tags"]),
+        )
+        for row in rows
+    ]
+
+    return TimelineResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        start=start,
+        end=end,
+        preset="year" if year is not None else preset,
+        label=label,
+    )
+
+
 @app.get("/api/stats/providers", response_model=List[ProviderStat])
 async def provider_stats(conn: psycopg.Connection = Depends(get_db)):
     with conn.cursor(row_factory=dict_row) as cursor:
@@ -169,6 +255,27 @@ async def provider_stats(conn: psycopg.Connection = Depends(get_db)):
         rows = cursor.fetchall()
     return [ProviderStat(provider=row["provider"], model_count=row["model_count"]) for row in rows]
 
+
+def _calculate_timeline_window(preset: str, year: Optional[int]) -> tuple[datetime, datetime, str]:
+    now = datetime.utcnow()
+    if year is not None:
+        start_dt = datetime(year, 1, 1)
+        end_dt = datetime(year, 12, 31, 23, 59, 59)
+        return start_dt, end_dt, f"{year}年"
+
+    preset = preset or "30d"
+    if preset == "6m":
+        start_dt = now - timedelta(days=182)
+        label = "近半年"
+    elif preset == "1y":
+        start_dt = datetime(now.year, 1, 1)
+        end_dt = now
+        return start_dt, end_dt, "今年"
+    else:
+        start_dt = now - timedelta(days=30)
+        label = "近30天"
+    end_dt = now
+    return start_dt, end_dt, label
 
 def _parse_tags(raw: Optional[str]) -> List[str]:
     if not raw:
@@ -185,4 +292,7 @@ def _parse_tags(raw: Optional[str]) -> List[str]:
 @app.get("/health")
 async def healthcheck():
     return {"status": "ok"}
+
+
+
 

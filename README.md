@@ -7,7 +7,7 @@ Silicon River fetches model cards from Hugging Face providers, persists them to 
 ## Features
 - `src/scraper/fetch_models.py` ingests metadata for the providers listed in `PROVIDERS` and stores the records in PostgreSQL.
 - `backend/main.py` exposes REST endpoints for listing models, querying details, and summarising provider stats.
-- `frontend/` hosts a Vite + React 18 + Tailwind UI that consumes the API and visualises the catalogue.
+- `frontend/` hosts a Vite + React 18 + Tailwind UI that consumes the API and visualises the catalogue (including a Three.js powered 3D timeline).
 - `tests/` includes pytest coverage for the ingestion workflow (mocked Hugging Face client, conflict handling, sync log recording).
 
 ## Tech Stack
@@ -90,6 +90,7 @@ SiliconRiver/
 - `GET /api/models` – paginated catalogue (`page`, `page_size`, `provider`, `tag`, `search`).
 - `GET /api/models/{model_id}` – single model details.
 - `GET /api/stats/providers` – model counts grouped by provider.
+- `GET /api/timeline` – timeline-ready slice filtered by preset (30d / 6m / 1y) or custom year.
 - `GET /health` – simple health probe.
 
 ## Testing

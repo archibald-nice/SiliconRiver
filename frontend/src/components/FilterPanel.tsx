@@ -1,23 +1,35 @@
-﻿interface FilterPanelProps {
+interface FilterPanelProps {
   providers: string[];
   provider?: string;
   onProviderChange: (value: string) => void;
   search: string;
   onSearchChange: (value: string) => void;
+  className?: string;
 }
 
-const FilterPanel = ({ providers, provider, onProviderChange, search, onSearchChange }: FilterPanelProps) => {
+const FilterPanel = ({
+  providers,
+  provider,
+  onProviderChange,
+  search,
+  onSearchChange,
+  className,
+}: FilterPanelProps) => {
+  const containerClasses = ["flex w-full flex-wrap items-center gap-3 text-text-secondary", className]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-black/40 p-4 md:flex-row md:items-center md:justify-between">
+    <div className={containerClasses}>
       <div className="flex items-center gap-2">
-        <label className="text-sm text-slate-400" htmlFor="provider-select">
+        <label className="text-xs uppercase tracking-wide text-text-muted" htmlFor="provider-select">
           厂商
         </label>
         <select
           id="provider-select"
           value={provider ?? ""}
           onChange={(event) => onProviderChange(event.target.value)}
-          className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm focus:border-river-accent focus:outline-none"
+          className="min-w-[8rem] rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
         >
           <option value="">全部</option>
           {providers.map((item) => (
@@ -27,8 +39,8 @@ const FilterPanel = ({ providers, provider, onProviderChange, search, onSearchCh
           ))}
         </select>
       </div>
-      <div className="flex items-center gap-2">
-        <label className="text-sm text-slate-400" htmlFor="search-input">
+      <div className="flex flex-1 items-center gap-2 md:flex-none">
+        <label className="text-xs uppercase tracking-wide text-text-muted" htmlFor="search-input">
           搜索
         </label>
         <input
@@ -37,7 +49,7 @@ const FilterPanel = ({ providers, provider, onProviderChange, search, onSearchCh
           placeholder="模型名称或描述"
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
-          className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm focus:border-river-accent focus:outline-none md:w-64"
+          className="w-full rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none md:w-64"
         />
       </div>
     </div>
