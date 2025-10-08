@@ -2,14 +2,25 @@ import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-import psycopg
+try:
+    import psycopg
+except ModuleNotFoundError:  # pragma: no cover
+    psycopg = None  # type: ignore
+try:
+    from fastapi.testclient import TestClient
+except ModuleNotFoundError:  # pragma: no cover
+    TestClient = None  # type: ignore
+import importlib
 import pytest
 
-from src.scraper import fetch_models as fm
+try:
+    from src.scraper import fetch_models as fm
+except ModuleNotFoundError:  # pragma: no cover
+    pytest.skip("src.scraper is unavailable in this environment", allow_module_level=True)
 
 TEST_DB_URL = os.getenv("TEST_DATABASE_URL")
-if not TEST_DB_URL:
-    pytest.skip("TEST_DATABASE_URL is not set; skipping PostgreSQL-dependent tests.", allow_module_level=True)
+if not TEST_DB_URL or psycopg is None or TestClient is None:
+    pytest.skip("PostgreSQL tests require psycopg, fastapi[testclient], and TEST_DATABASE_URL", allow_module_level=True)
 
 
 def _make_model(model_id: str, *, created_at: datetime | None = None, tags=None, description: str = ""):
@@ -68,6 +79,18 @@ def test_fetch_and_store_inserts(monkeypatch):
             cursor.execute("SELECT processed, inserted FROM sync_log")
             sync_rows = cursor.fetchall()
             assert sync_rows == [(3, 2)]
+
+    backend_main = importlib.import_module("backend.main")
+    importlib.reload(backend_main)
+    client = TestClient(backend_main.app)
+    response = client.get("/api/timeline", params={"preset": "1y", "page_size": 5, "sort": "asc"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    assert payload["total"] >= len(payload["items"])
+    assert payload["page"] == 1
+    assert payload["page_size"] == 5
+    assert payload["start"] <= payload["end"]
 
 
 @pytest.mark.parametrize("raw, expected", [

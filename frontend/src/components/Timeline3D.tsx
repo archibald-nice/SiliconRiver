@@ -1,0 +1,359 @@
+
+import * as THREE from "three";
+import { useEffect, useRef } from "react";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+
+import type { TimelineModel } from "../api/client";
+
+type Timeline3DProps = {
+  models: TimelineModel[];
+};
+
+const CANVAS_HEIGHT = 520;
+const focusAnchor = new THREE.Vector3(6, -3, -8);
+const WHEEL_STEP = 1;
+
+const CAMERA_POSITION = new THREE.Vector3(-34, 26, 30);
+const CAMERA_LOOK_TARGET = focusAnchor.clone();
+
+const COLOR_BASE = 0xfacc15;
+const COLOR_ACTIVE = 0xfb923c;
+const COLOR_LINE = 0x1e293b;
+
+type ThreeMesh = InstanceType<typeof THREE.Mesh>;
+type ThreeVector3 = InstanceType<typeof THREE.Vector3>;
+type ThreeMeshStandardMaterial = InstanceType<typeof THREE.MeshStandardMaterial>;
+type ThreeColor = InstanceType<typeof THREE.Color>;
+
+const toTwoDigits = (value: number) => String(value).padStart(2, "0");
+
+const formatDateLabel = (date: Date) =>
+  `${date.getUTCFullYear()}-${toTwoDigits(date.getUTCMonth() + 1)}-${toTwoDigits(date.getUTCDate())}`;
+
+const createLabelSprite = (text: string) => {
+  const canvas = document.createElement("canvas");
+  const size = 256;
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Canvas not supported");
+  }
+
+  context.clearRect(0, 0, size, size);
+  context.fillStyle = "rgba(15,23,42,0.85)";
+  context.fillRect(0, size / 2 - 32, size, 64);
+  context.fillStyle = "#f8fafc";
+  context.font = "34px sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(text, size / 2, size / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+  const sprite = new THREE.Sprite(material);
+  const scale = 3.4;
+  sprite.scale.set((scale * canvas.width) / canvas.height, scale, 1);
+  return sprite;
+};
+
+const Timeline3D = ({ models }: Timeline3DProps) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || models.length === 0) {
+      if (container) {
+        container.innerHTML = "";
+      }
+      return () => undefined;
+    }
+
+    container.innerHTML = "";
+
+    const tooltip = document.createElement("div");
+    tooltip.className =
+      "pointer-events-none rounded-md border border-border-default bg-surface-overlay px-3 py-2 text-xs text-text-primary shadow-lg shadow-accent transition-colors";
+    tooltip.style.position = "absolute";
+    tooltip.style.visibility = "hidden";
+    tooltip.style.zIndex = "10";
+    container.appendChild(tooltip);
+
+    const width = container.clientWidth;
+    const height = CANVAS_HEIGHT;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020617);
+
+    const camera = new THREE.PerspectiveCamera(48, width / height, 0.1, 1000);
+    camera.position.copy(CAMERA_POSITION);
+    camera.lookAt(CAMERA_LOOK_TARGET);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enablePan = false;
+    controls.enableZoom = false;
+    controls.enableRotate = true;
+    controls.minPolarAngle = THREE.MathUtils.degToRad(32);
+    controls.maxPolarAngle = THREE.MathUtils.degToRad(58);
+    controls.minAzimuthAngle = THREE.MathUtils.degToRad(-28);
+    controls.maxAzimuthAngle = THREE.MathUtils.degToRad(6);
+    controls.target.copy(CAMERA_LOOK_TARGET);
+    controls.update();
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    directionalLight.position.set(10, 20, 30);
+    scene.add(ambientLight, directionalLight);
+
+    const sorted = [...models].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    const times = sorted.map((item) => new Date(item.created_at).getTime());
+    const minTime = Math.min(...times);
+    const maxTime = Math.max(...times);
+    const span = Math.max(maxTime - minTime, 1);
+
+    const controlPoints: ThreeVector3[] = [];
+    const farPoint = new THREE.Vector3(-26, 12, -60);
+    const nearPoint = new THREE.Vector3(12, -10, 12);
+    const curveBend = new THREE.Vector3(-8, -2, -12);
+
+    sorted.forEach((model, index) => {
+      const t = index / Math.max(sorted.length - 1, 1);
+      const interp = farPoint.clone().lerp(nearPoint, t);
+      const lateralWave = Math.sin(t * Math.PI) * 4;
+      const verticalWave = Math.cos(t * Math.PI * 0.75) * 2.3;
+      const bendFactor = t * (1 - t);
+      interp.add(new THREE.Vector3(lateralWave, verticalWave, 0));
+      interp.add(curveBend.clone().multiplyScalar(bendFactor));
+      controlPoints.push(interp);
+    });
+    if (controlPoints.length < 2) {
+      controlPoints.push(controlPoints[0].clone().add(new THREE.Vector3(4, -2, 6)));
+    }
+
+    const baseCurve = new THREE.CatmullRomCurve3(controlPoints);
+    const tubeGeometry = new THREE.TubeGeometry(baseCurve, 400, 0.25, 12, false);
+    const tubeMaterial = new THREE.MeshStandardMaterial({ color: COLOR_LINE, emissive: 0x0f172a });
+    const tubeMesh = new THREE.Mesh(tubeGeometry, tubeMaterial);
+
+    const timelineGroup = new THREE.Group();
+    timelineGroup.add(tubeMesh);
+    scene.add(timelineGroup);
+
+    const markerGeometry = new THREE.SphereGeometry(0.7, 18, 18);
+    const markers: Array<{
+      mesh: ThreeMesh;
+      basePosition: ThreeVector3;
+      model: TimelineModel;
+      material: ThreeMeshStandardMaterial;
+      currentScale: number;
+      targetScale: number;
+      currentOpacity: number;
+      targetOpacity: number;
+      targetColor: ThreeColor;
+    }> = [];
+
+    sorted.forEach((model) => {
+      const created = new Date(model.created_at).getTime();
+      const t = (created - minTime) / span;
+      const basePosition = baseCurve.getPointAt(t);
+      const material = new THREE.MeshStandardMaterial({
+        color: COLOR_BASE,
+        emissive: 0x312e81,
+        transparent: true,
+        opacity: 1,
+      });
+      const mesh = new THREE.Mesh(markerGeometry.clone(), material);
+      mesh.position.copy(basePosition);
+      mesh.userData = { model };
+      timelineGroup.add(mesh);
+      markers.push({
+        mesh,
+        basePosition,
+        model,
+        material,
+        currentScale: 1,
+        targetScale: 1,
+        currentOpacity: 1,
+        targetOpacity: 1,
+        targetColor: new THREE.Color(COLOR_BASE),
+      });
+    });
+
+    const axisGroup = new THREE.Group();
+    const axisMaterial = new THREE.LineBasicMaterial({ color: 0x475569 });
+    const axisStart = baseCurve.getPointAt(0).clone().add(new THREE.Vector3(-1, -6, -2));
+    const axisEnd = baseCurve.getPointAt(1).clone().add(new THREE.Vector3(1.5, -6, 2));
+    const axisGeometry = new THREE.BufferGeometry().setFromPoints([axisStart, axisEnd]);
+    axisGroup.add(new THREE.Line(axisGeometry, axisMaterial));
+
+    const tickCount = Math.min(8, Math.max(sorted.length, 2));
+    for (let i = 0; i < tickCount; i += 1) {
+      const fraction = i / Math.max(tickCount - 1, 1);
+      const point = baseCurve.getPointAt(fraction);
+      const tickBase = point.clone().add(new THREE.Vector3(0, -6, 0));
+      const tickGeometry = new THREE.BufferGeometry().setFromPoints([
+        tickBase,
+        tickBase.clone().add(new THREE.Vector3(0, 1.2, 0)),
+      ]);
+      axisGroup.add(new THREE.Line(tickGeometry, axisMaterial));
+      const labelDate = new Date(minTime + span * fraction);
+      const sprite = createLabelSprite(formatDateLabel(labelDate));
+      sprite.position.set(point.x + 0.6, tickBase.y - 0.8, point.z);
+      axisGroup.add(sprite);
+    }
+    timelineGroup.add(axisGroup);
+
+    let highlightIndex = markers.length - 1;
+    let currentTimelineOffset = timelineGroup.position.clone();
+    let targetTimelineOffset = timelineGroup.position.clone();
+    const activeColor = new THREE.Color(COLOR_ACTIVE);
+    const baseColor = new THREE.Color(COLOR_BASE);
+    const cameraFocus = CAMERA_LOOK_TARGET.clone();
+    let targetCameraFocus = CAMERA_LOOK_TARGET.clone();
+
+    const applyFocus = () => {
+      if (!markers.length) {
+        return;
+      }
+      highlightIndex = Math.max(0, Math.min(highlightIndex, markers.length - 1));
+      const targetMarker = markers[highlightIndex];
+      const offset = focusAnchor.clone().sub(targetMarker.basePosition);
+      targetTimelineOffset = offset;
+      targetCameraFocus = focusAnchor.clone();
+
+      markers.forEach((entry, index) => {
+        if (index === highlightIndex) {
+          entry.targetScale = 1.6;
+          entry.targetOpacity = 1;
+          entry.targetColor = activeColor.clone();
+          return;
+        }
+
+        const distance = index - highlightIndex;
+        if (distance < 0) {
+          const backward = Math.abs(distance);
+          entry.targetScale = backward === 1 ? 0.9 : backward === 2 ? 0.75 : 0.6;
+          entry.targetOpacity = backward === 1 ? 0.25 : backward === 2 ? 0.12 : 0;
+          entry.targetColor = baseColor.clone();
+        } else {
+          entry.targetScale = distance === 1 ? 1.15 : distance === 2 ? 1.05 : 1.0;
+          entry.targetOpacity = distance === 1 ? 0.8 : distance === 2 ? 0.6 : 0.45;
+          entry.targetColor = baseColor.clone();
+        }
+      });
+    };
+
+    applyFocus();
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+      pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+
+      raycaster.setFromCamera(pointer, camera);
+      const intersects = raycaster.intersectObjects(markers.map((entry) => entry.mesh));
+
+      tooltip.style.visibility = "hidden";
+      if (intersects.length > 0) {
+        const intersect = intersects[0].object as ThreeMesh;
+        const model = intersect.userData.model as TimelineModel | undefined;
+        if (model) {
+          tooltip.innerHTML = `
+            <div class="font-semibold text-accent-base">${model.provider}</div>
+            <div class="text-sm text-text-secondary">${model.model_name}</div>
+            <div class="mt-1 text-xs text-text-muted">${new Date(model.created_at).toLocaleString()}</div>
+          `;
+          const { clientX, clientY } = event;
+          tooltip.style.left = `${clientX - bounds.left + 14}px`;
+          tooltip.style.top = `${clientY - bounds.top + 14}px`;
+          tooltip.style.visibility = "visible";
+        }
+      }
+    };
+
+    const handlePointerLeave = () => {
+      tooltip.style.visibility = "hidden";
+    };
+
+    renderer.domElement.addEventListener("pointermove", handlePointerMove);
+    renderer.domElement.addEventListener("pointerleave", handlePointerLeave);
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const direction = Math.sign(event.deltaY);
+      const next = THREE.MathUtils.clamp(highlightIndex + direction * WHEEL_STEP, 0, markers.length - 1);
+      if (next !== highlightIndex) {
+        highlightIndex = next;
+        applyFocus();
+      }
+    };
+    renderer.domElement.addEventListener("wheel", handleWheel, { passive: false });
+
+    const handleResize = () => {
+      const newWidth = container.clientWidth;
+      camera.aspect = newWidth / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(newWidth, height);
+    };
+    window.addEventListener("resize", handleResize);
+
+    let animationId = 0;
+    const animate = () => {
+      currentTimelineOffset.lerp(targetTimelineOffset, 0.12);
+      timelineGroup.position.copy(currentTimelineOffset);
+
+      cameraFocus.lerp(targetCameraFocus, 0.08);
+      controls.target.copy(cameraFocus);
+      controls.update();
+
+      markers.forEach((entry) => {
+        entry.currentScale = THREE.MathUtils.lerp(entry.currentScale, entry.targetScale, 0.2);
+        entry.mesh.scale.setScalar(entry.currentScale);
+
+        entry.currentOpacity = THREE.MathUtils.lerp(entry.currentOpacity, entry.targetOpacity, 0.18);
+        entry.material.opacity = entry.currentOpacity;
+        entry.material.color.lerp(entry.targetColor, 0.2);
+      });
+
+      renderer.render(scene, camera);
+      animationId = requestAnimationFrame(animate);
+    };
+    animationId = requestAnimationFrame(animate);
+
+    return () => {
+      cancelAnimationFrame(animationId);
+      window.removeEventListener("resize", handleResize);
+      renderer.domElement.removeEventListener("pointermove", handlePointerMove);
+      renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
+      renderer.domElement.removeEventListener("wheel", handleWheel);
+      tooltip.remove();
+      controls.dispose();
+      tubeGeometry.dispose();
+      tubeMaterial.dispose();
+      markerGeometry.dispose();
+      markers.forEach(({ mesh, material }) => {
+        material.dispose();
+        timelineGroup.remove(mesh);
+      });
+      axisMaterial.dispose();
+      axisGroup.clear();
+      scene.remove(timelineGroup);
+      renderer.dispose();
+      renderer.domElement.remove();
+    };
+  }, [models]);
+
+  return <div ref={containerRef} className="relative w-full" style={{ minHeight: CANVAS_HEIGHT }} />;
+};
+
+export default Timeline3D;
