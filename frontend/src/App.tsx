@@ -10,7 +10,7 @@ const App = () => {
   return (
     <div className="min-h-screen bg-surface-base text-text-primary transition-colors">
       <header className="border-b border-border-strong bg-surface-overlay backdrop-blur-md transition-colors">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-6 py-4">
           <div>
             <h1 className="text-xl font-semibold text-text-primary">硅基长河 · Silicon River</h1>
             <p className="text-sm text-text-muted">大模型发布一站式观察台</p>
@@ -26,7 +26,7 @@ const App = () => {
           </button>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      <main className="mx-auto px-6 py-8">
         <Home />
       </main>
     </div>

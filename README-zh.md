@@ -115,7 +115,7 @@ SiliconRiver/
 6. **启动 API**
    ```bash
    cd backend
-   uvicorn main:app --reload --port 8000
+   uvicorn main:app --reload --port 8080
    ```
 7. **启动前端**（新终端）
    ```bash
