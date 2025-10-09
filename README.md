@@ -1,4 +1,4 @@
-# Silicon River
+﻿# Silicon River
 
 > Unified pipeline that mirrors Hugging Face model metadata into PostgreSQL and serves it through a FastAPI + React stack.
 
@@ -115,7 +115,7 @@ Sample dataset: `data/silicon_river.db` is a pre-filled SQLite snapshot for quic
 6. **Start the API**
    ```bash
    cd backend
-   uvicorn main:app --reload --port 8000
+   uvicorn main:app --reload --port 8080
    ```
 7. **Launch the frontend** (new terminal)
    ```bash
