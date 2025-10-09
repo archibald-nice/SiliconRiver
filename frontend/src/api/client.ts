@@ -6,6 +6,7 @@ export const api = axios.create({
   baseURL,
 });
 
+/** @deprecated 归档：模型列表视图已下线，接口保留以兼容历史用例。 */
 export interface ModelSummary {
   model_id: string;
   provider: string;
@@ -51,11 +52,13 @@ export interface TimelineResponse {
   label: string;
 }
 
+/** @deprecated 归档：模型列表视图已下线，接口保留以兼容历史用例。 */
 export const fetchModels = async (params: Record<string, unknown>) => {
   const { data } = await api.get<ModelListResponse>("/api/models", { params });
   return data;
 };
 
+/** @deprecated 归档：厂商统计面板已下线，接口保留以兼容历史用例。 */
 export const fetchStats = async () => {
   const { data } = await api.get<ProviderStat[]>("/api/stats/providers");
   return data;
