@@ -184,6 +184,8 @@ async def timeline_models(
     page: int = Query(1, ge=1),
     page_size: int = Query(200, ge=10, le=500),
     sort: str = Query("asc", regex="^(asc|desc)"),
+    provider: Optional[str] = Query(None),
+    model_name: Optional[str] = Query(None),
     conn: psycopg.Connection = Depends(get_db),
 ):
     start_dt, end_dt, label = _calculate_timeline_window(preset=preset, year=year)
@@ -191,28 +193,40 @@ async def timeline_models(
     end = end_dt.isoformat()
     order_clause = "ASC" if sort == "asc" else "DESC"
     offset = (page - 1) * page_size
+    filters: List[str] = ["created_at BETWEEN %s AND %s"]
+    params: List[object] = [start, end]
+
+    if provider:
+        filters.append("provider = %s")
+        params.append(provider)
+    if model_name:
+        filters.append("model_name ILIKE %s")
+        params.append(f"%{model_name}%")
+
+    where_clause = " AND ".join(filters)
 
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
-            """
+            f"""
             SELECT COUNT(*) AS total
             FROM models
-            WHERE created_at BETWEEN %s AND %s
+            WHERE {where_clause}
             """,
-            [start, end],
+            params,
         )
         total_row = cursor.fetchone()
         total = int(total_row["total"]) if total_row else 0
 
+        query_params = [*params, page_size, offset]
         cursor.execute(
             f"""
             SELECT model_id, provider, model_name, description, tags, created_at, model_card_url
             FROM models
-            WHERE created_at BETWEEN %s AND %s
+            WHERE {where_clause}
             ORDER BY created_at {order_clause}
             LIMIT %s OFFSET %s
             """,
-            [start, end, page_size, offset],
+            query_params,
         )
         rows = cursor.fetchall()
 

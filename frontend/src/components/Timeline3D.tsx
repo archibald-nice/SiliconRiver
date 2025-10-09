@@ -75,6 +75,36 @@ const createLabelSprite = (text: string) => {
   return sprite;
 };
 
+const buildTimelineCurve = (sampleCount: number) => {
+  const segments = Math.max(sampleCount * 2, 36);
+  const points: ThreeVector3[] = [];
+  const startAngle = -Math.PI * 1.25;
+  const endAngle = Math.PI * 1.4;
+  const startRadius = 26;
+  const endRadius = 6;
+  const startHeight = -16;
+  const endHeight = 14;
+  const depthShift = -28;
+
+  for (let index = 0; index < segments; index += 1) {
+    const t = segments > 1 ? index / (segments - 1) : 0;
+    const easedRadius = THREE.MathUtils.lerp(startRadius, endRadius, Math.pow(t, 0.88));
+    const angle = THREE.MathUtils.lerp(startAngle, endAngle, t);
+    const baseHeight = THREE.MathUtils.lerp(startHeight, endHeight, t);
+    const wave = Math.sin(t * Math.PI * 1.15) * 4.2 * (1 - t * 0.4);
+    const x = Math.cos(angle) * easedRadius;
+    const z = Math.sin(angle) * easedRadius + depthShift * (1 - t * 0.7);
+    const y = baseHeight + wave;
+    points.push(new THREE.Vector3(x, y, z));
+  }
+
+  const endPoint = points[points.length - 1]?.clone() ?? new THREE.Vector3();
+  points.forEach((point) => point.sub(endPoint));
+  points.forEach((point) => point.add(focusAnchor));
+
+  return new THREE.CatmullRomCurve3(points, false, "catmullrom", 0.6);
+};
+
 const Timeline3D = ({ models }: Timeline3DProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -99,7 +129,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const focusBubble = document.createElement("div");
     focusBubble.className =
-      "pointer-events-none w-60 max-w-xs rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors";
+      "pointer-events-auto w-60 max-w-xs rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors select-text";
     focusBubble.style.position = "absolute";
     focusBubble.style.visibility = "hidden";
     focusBubble.style.zIndex = "9";
@@ -144,27 +174,8 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     const maxTime = Math.max(...times);
     const span = Math.max(maxTime - minTime, 1);
 
-    const controlPoints: ThreeVector3[] = [];
-    const farPoint = new THREE.Vector3(-26, 12, -60);
-    const nearPoint = new THREE.Vector3(12, -10, 12);
-    const curveBend = new THREE.Vector3(-8, -2, -12);
-
-    sorted.forEach((model, index) => {
-      const t = index / Math.max(sorted.length - 1, 1);
-      const interp = farPoint.clone().lerp(nearPoint, t);
-      const lateralWave = Math.sin(t * Math.PI) * 4;
-      const verticalWave = Math.cos(t * Math.PI * 0.75) * 2.3;
-      const bendFactor = t * (1 - t);
-      interp.add(new THREE.Vector3(lateralWave, verticalWave, 0));
-      interp.add(curveBend.clone().multiplyScalar(bendFactor));
-      controlPoints.push(interp);
-    });
-    if (controlPoints.length < 2) {
-      controlPoints.push(controlPoints[0].clone().add(new THREE.Vector3(4, -2, 6)));
-    }
-
-    const baseCurve = new THREE.CatmullRomCurve3(controlPoints);
-    const tubeGeometry = new THREE.TubeGeometry(baseCurve, 400, 0.25, 12, false);
+    const baseCurve = buildTimelineCurve(sorted.length);
+    const tubeGeometry = new THREE.TubeGeometry(baseCurve, 420, 0.28, 16, false);
     const tubeMaterial = new THREE.MeshStandardMaterial({ color: COLOR_LINE, emissive: 0x0f172a });
     const tubeMesh = new THREE.Mesh(tubeGeometry, tubeMaterial);
 
@@ -211,6 +222,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         targetOpacity: 1,
         targetColor: new THREE.Color(COLOR_BASE),
       });
+      mesh.userData.markerIndex = markers.length - 1;
     });
 
     const focusPosition = new THREE.Vector3();
@@ -238,10 +250,18 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const axisGroup = new THREE.Group();
     const axisMaterial = new THREE.LineBasicMaterial({ color: 0x475569 });
+    const arrowMaterial = new THREE.MeshBasicMaterial({ color: 0x475569 });
+    const arrowGeometry = new THREE.ConeGeometry(0.38, 1.2, 12);
+    arrowGeometry.translate(0, -0.6, 0);
     const axisStart = baseCurve.getPointAt(0).clone().add(new THREE.Vector3(-1, -6, -2));
     const axisEnd = baseCurve.getPointAt(1).clone().add(new THREE.Vector3(1.5, -6, 2));
     const axisGeometry = new THREE.BufferGeometry().setFromPoints([axisStart, axisEnd]);
     axisGroup.add(new THREE.Line(axisGeometry, axisMaterial));
+    const axisDirection = axisEnd.clone().sub(axisStart).normalize();
+    const arrowHead = new THREE.Mesh(arrowGeometry, arrowMaterial);
+    arrowHead.position.copy(axisEnd);
+    arrowHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axisDirection);
+    axisGroup.add(arrowHead);
 
     const tickCount = Math.min(8, Math.max(sorted.length, 2));
     for (let i = 0; i < tickCount; i += 1) {
@@ -267,6 +287,30 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     const baseColor = new THREE.Color(COLOR_BASE);
     const cameraFocus = CAMERA_LOOK_TARGET.clone();
     let targetCameraFocus = CAMERA_LOOK_TARGET.clone();
+
+    const focusMarkerAt = (index: number) => {
+      if (!markers.length) {
+        return;
+      }
+      const clamped = THREE.MathUtils.clamp(index, 0, markers.length - 1);
+      if (clamped !== highlightIndex) {
+        highlightIndex = clamped;
+      }
+      applyFocus();
+    };
+
+    const focusMarkerMesh = (mesh: ThreeMesh | null) => {
+      if (!mesh) {
+        return;
+      }
+      const index =
+        typeof mesh.userData.markerIndex === "number"
+          ? mesh.userData.markerIndex
+          : markers.findIndex((entry) => entry.mesh === mesh);
+      if (index >= 0) {
+        focusMarkerAt(index);
+      }
+    };
 
     const applyFocus = () => {
       if (!markers.length) {
@@ -306,6 +350,8 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
+    const pointerDown = new THREE.Vector2();
+    let pointerDownTimestamp = 0;
 
     const handlePointerMove = (event: PointerEvent) => {
       const bounds = renderer.domElement.getBoundingClientRect();
@@ -337,8 +383,40 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       tooltip.style.visibility = "hidden";
     };
 
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) {
+        return;
+      }
+      const bounds = renderer.domElement.getBoundingClientRect();
+      pointerDown.set(event.clientX - bounds.left, event.clientY - bounds.top);
+      pointerDownTimestamp = performance.now();
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (event.button !== 0) {
+        return;
+      }
+      const now = performance.now();
+      const bounds = renderer.domElement.getBoundingClientRect();
+      const upX = event.clientX - bounds.left;
+      const upY = event.clientY - bounds.top;
+      const delta = Math.hypot(upX - pointerDown.x, upY - pointerDown.y);
+      if (delta > 6 || now - pointerDownTimestamp > 350) {
+        return;
+      }
+      pointer.x = (upX / bounds.width) * 2 - 1;
+      pointer.y = -(upY / bounds.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const intersects = raycaster.intersectObjects(markers.map((entry) => entry.mesh));
+      if (intersects.length > 0) {
+        focusMarkerMesh(intersects[0].object as ThreeMesh);
+      }
+    };
+
     renderer.domElement.addEventListener("pointermove", handlePointerMove);
     renderer.domElement.addEventListener("pointerleave", handlePointerLeave);
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+    renderer.domElement.addEventListener("pointerup", handlePointerUp);
 
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -402,6 +480,8 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       window.removeEventListener("resize", handleResize);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
+      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+      renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       renderer.domElement.removeEventListener("wheel", handleWheel);
       tooltip.remove();
       focusBubble.remove();
@@ -413,6 +493,8 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         material.dispose();
         timelineGroup.remove(mesh);
       });
+      arrowGeometry.dispose();
+      arrowMaterial.dispose();
       axisMaterial.dispose();
       axisGroup.clear();
       scene.remove(timelineGroup);

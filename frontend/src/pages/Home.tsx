@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchTimeline, type TimelineResponse } from "../api/client";
+import { fetchStats, fetchTimeline, type ProviderStat, type TimelineResponse } from "../api/client";
 import Timeline3D from "../components/Timeline3D";
 import TimelineFilters, { TimelinePresetRange } from "../components/TimelineFilters";
 
@@ -11,9 +11,20 @@ const Home = () => {
   const [timelineRange, setTimelineRange] = useState<TimelinePresetRange>("30d");
   const [timelineYear, setTimelineYear] = useState<number | null>(null);
   const [timelinePage, setTimelinePage] = useState(1);
+  const [timelineProvider, setTimelineProvider] = useState<string | null>(null);
+  const [timelineSearchInput, setTimelineSearchInput] = useState("");
+  const [timelineSearchFilter, setTimelineSearchFilter] = useState("");
+
+  const { data: providerStats } = useQuery<ProviderStat[]>({
+    queryKey: ["provider-stats"],
+    queryFn: fetchStats,
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const providerOptions = useMemo(() => providerStats?.map((item) => item.provider) ?? [], [providerStats]);
 
   const { data: timelineData, isLoading: isTimelineLoading } = useQuery<TimelineResponse>({
-    queryKey: ["timeline", timelineRange, timelineYear, timelinePage],
+    queryKey: ["timeline", timelineRange, timelineYear, timelinePage, timelineProvider, timelineSearchFilter],
     queryFn: () =>
       fetchTimeline({
         preset: timelineRange,
@@ -21,12 +32,13 @@ const Home = () => {
         page: timelinePage,
         page_size: TIMELINE_PAGE_SIZE,
         sort: "asc",
+        provider: timelineProvider,
+        model_name: timelineSearchFilter || undefined,
       }),
   });
 
   const timelineItems = timelineData?.items ?? [];
-  const timelineWindowStart = timelineData?.start;
-  const timelineWindowEnd = timelineData?.end;
+  const timelineTotal = timelineData?.total ?? 0;
   const timelineTotalPages = timelineData ? Math.max(1, Math.ceil(timelineData.total / timelineData.page_size)) : 1;
 
   const onTimelinePageChange = useCallback(
@@ -69,12 +81,29 @@ const Home = () => {
       <aside className="flex flex-col gap-4">
         <section className="rounded-2xl border border-border-default bg-surface-raised p-5 shadow-lg shadow-accent transition-colors">
           <header className="mb-4 space-y-1">
-            <h2 className="text-sm font-semibold text-text-primary">时间筛选</h2>
-            <p className="text-xs text-text-muted">调整右侧时间窗口以更新时间线展示。</p>
+            <h2 className="text-sm font-semibold text-text-primary">{"\u6a21\u578b\u68c0\u7d22"}</h2>
+            <p className="text-xs text-text-muted">{"\u6309\u65f6\u95f4\u3001\u53d1\u5e03\u516c\u53f8\u6216\u540d\u79f0\u5feb\u901f\u5b9a\u4f4d\u6a21\u578b\u8282\u70b9\u3002"}</p>
           </header>
           <TimelineFilters
             activeRange={timelineRange}
             customYear={timelineYear}
+            providers={providerOptions}
+            selectedProvider={timelineProvider}
+            onProviderChange={(value) => {
+              setTimelineProvider(value);
+              setTimelinePage(1);
+            }}
+            modelQuery={timelineSearchInput}
+            onModelQueryChange={setTimelineSearchInput}
+            onModelQuerySubmit={() => {
+              setTimelineSearchFilter(timelineSearchInput.trim());
+              setTimelinePage(1);
+            }}
+            onModelQueryClear={() => {
+              setTimelineSearchFilter("");
+              setTimelineSearchInput("");
+              setTimelinePage(1);
+            }}
             onPresetChange={(range) => {
               setTimelineRange(range);
               setTimelineYear(null);
@@ -92,28 +121,13 @@ const Home = () => {
           />
           {timelineData && (
             <div className="mt-4 border-t border-border-default pt-4 text-xs text-text-muted">
-              {timelineWindowStart && timelineWindowEnd ? (
-                <p>窗口：{timelineWindowStart} ➝ {timelineWindowEnd}</p>
-              ) : null}
-              <p className="mt-1">页码：{currentTimelinePage} / {timelineTotalPages}</p>
-              <div className="mt-3 flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => onTimelinePageChange("prev")}
-                  disabled={!canGoPrevTimeline}
-                  className="rounded-md border border-border-default px-3 py-1 text-xs text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary disabled:opacity-40"
-                >
-                  上一页
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onTimelinePageChange("next")}
-                  disabled={!canGoNextTimeline}
-                  className="rounded-md border border-border-default px-3 py-1 text-xs text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary disabled:opacity-40"
-                >
-                  下一页
-                </button>
-              </div>
+              <p>
+                {`💠 总计：`}
+                <span className="font-semibold text-text-primary">
+                  {timelineTotal.toLocaleString()}
+                </span>
+                {` 个模型节点`}
+              </p>
             </div>
           )}
         </section>
@@ -123,3 +137,11 @@ const Home = () => {
 };
 
 export default Home;
+
+
+
+
+
+
+
+
