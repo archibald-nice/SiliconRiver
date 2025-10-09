@@ -2,24 +2,29 @@
 
 > Unified pipeline that mirrors Hugging Face model metadata into PostgreSQL and serves it through a FastAPI + React stack.
 
-Silicon River fetches model cards from Hugging Face providers, persists them to PostgreSQL, exposes a read API, and renders an interactive dashboard. Everything is packaged so the scraper, API, and UI can be deployed separately or together.
+Need a Chinese version? See [README-zh.md](README-zh.md).
 
-## Features
-- `src/scraper/fetch_models.py` ingests metadata for the providers listed in `PROVIDERS` and stores the records in PostgreSQL.
-- `backend/main.py` exposes REST endpoints for listing models, querying details, and summarising provider stats.
-- `frontend/` hosts a Vite + React 18 + Tailwind UI that consumes the API and visualises the catalogue (including a Three.js powered 3D timeline).
-- `tests/` includes pytest coverage for the ingestion workflow (mocked Hugging Face client, conflict handling, sync log recording).
+## Project Overview
+- Scrape Hugging Face organisations listed in `PROVIDERS`, normalise records, and persist them to PostgreSQL.
+- Serve a REST API for catalogue browsing, timeline exploration, and provider statistics.
+- Deliver an interactive React + Three.js dashboard that visualises the catalogue and timeline.
+- Package the scraper, API, and frontend so they can be deployed independently or as a single stack.
 
-## Tech Stack
-- **Backend**: FastAPI, Pydantic, PostgreSQL, python-dotenv, psycopg 3.
-- **Data ingestion**: Hugging Face Hub SDK, tqdm.
-- **Frontend**: React 18, Vite, @tanstack/react-query, Tailwind CSS, Headless UI, Hero Icons.
-- **Tooling**: pytest, TypeScript, Vite build toolchain.
+## Architecture at a Glance
+```text
+Hugging Face Hub
+       |
+       v
+Scraper (Python) --> PostgreSQL <-- FastAPI REST API --> React + Three.js Dashboard
+                       |
+                       v
+                Sync Log & Tests
+```
 
-## Project Layout
+## Repository Layout
 ```text
 SiliconRiver/
-|- backend/              FastAPI application entry point and deps
+|- backend/              FastAPI application entry point and dependencies
 |  |- main.py
 |  |- requirements.txt
 |- scripts/
@@ -27,26 +32,60 @@ SiliconRiver/
 |- src/
 |  |- scraper/
 |     |- fetch_models.py Hugging Face ingestion script
-|- frontend/             React + Tailwind single page app
-|- tests/                pytest suite for data ingestion
-|- requirements.txt      Shared Python dependencies (scraper/tests)
-|- .env.example          Root env template (HF token, providers, DB)
+|- frontend/             React + Tailwind single page app (Vite build)
+|- tests/                pytest suite covering the ingestion workflow
+|- data/                 Local sample database (SQLite) for exploration
+|- requirements.txt      Shared Python dependencies for scraper/tests
+|- .env.example          Root environment template (HF token, providers, DB)
 ```
 
-## Prerequisites
-- Python 3.11+
-- Node.js 20+
-- npm (or another Node package manager)
-- PostgreSQL database reachable from the scraper and API
-- Hugging Face access token (optional but recommended to avoid rate limits)
+## Core Components
+### Scraper (`src/scraper/fetch_models.py`)
+- Uses the Hugging Face Hub SDK to list models per provider, maps them to `ModelRecord`, and writes to `models` and `sync_log` tables.
+- Normalises timestamps to UTC strings, truncates long descriptions, and stores tags as JSON.
+- Reuses `scripts.init_db.create_schema` to guarantee tables and indexes exist before inserting.
 
-## Getting Started
+### Database Schema (`scripts/init_db.py`)
+- Defines `models` (unique `model_id`, metadata fields, audit timestamps) and `sync_log` (per-run metrics).
+- Adds indexes on provider, creation date, and sync activity for efficient filtering.
+
+### FastAPI Backend (`backend/main.py`)
+- Exposes `/api/models`, `/api/models/{model_id}`, `/api/timeline`, `/api/stats/providers`, and `/health`.
+- Implements filtering by provider, tag, search term, pagination, and timeline presets (30d, 6m, 1y) or custom year.
+- Uses Pydantic response models and psycopg 3 with `dict_row` cursors for typed responses.
+- Enables permissive CORS and reads `DATABASE_URL` from the project `.env` file.
+
+### React Frontend (`frontend/`)
+- Vite + React 18 + TypeScript + Tailwind UI, backed by React Query for data fetching and caching.
+- `Home.tsx` provides a tabbed timeline and list view, filter panel, and paginated model cards.
+- `Timeline3D.tsx` renders an interactive Three.js curve with hover tooltips and scroll navigation.
+- Environment variable `VITE_API_BASE` controls which backend instance the SPA targets.
+
+### Test Suite (`tests/test_fetch_models.py`)
+- Spins up the ingestion pipeline against `TEST_DATABASE_URL`, mocking the Hugging Face client.
+- Verifies deduplication, sync log entries, and exercises the FastAPI timeline endpoint via `TestClient`.
+- Requires psycopg and `fastapi[testclient]`; skips automatically if prerequisites are missing.
+
+## Environment Configuration
+Environment values can be supplied via the root `.env`, service-specific `.env` files, or runtime variables.
+
+| Variable | Purpose | Notes |
+|----------|---------|-------|
+| `HF_TOKEN` | Optional Hugging Face token for higher rate limits | Stored in root `.env` |
+| `PROVIDERS` | Comma-separated organisation IDs to mirror (for example `meta-llama,google`) | Required for scraper |
+| `DATABASE_URL` | PostgreSQL DSN used by scraper and API | Example `postgresql://user:pass@host:5432/silicon_river` |
+| `TEST_DATABASE_URL` | PostgreSQL DSN for pytest runs | Point to a disposable database |
+| `VITE_API_BASE` | Backend base URL consumed by the frontend SPA | Defaults to `http://localhost:8000` |
+
+Sample dataset: `data/silicon_river.db` is a pre-filled SQLite snapshot for quick exploration or offline debugging.
+
+## Quick Start
 1. **Clone the repository**
    ```bash
    git clone <repo-url>
    cd SiliconRiver
    ```
-2. **Install Python dependencies**
+2. **Create a virtual environment and install Python dependencies**
    ```bash
    python -m venv .venv
    .venv\Scripts\activate      # Windows
@@ -60,11 +99,11 @@ SiliconRiver/
    cp backend/.env.example backend/.env
    cp frontend/.env.example frontend/.env
    ```
-   Fill in:
-   - `HF_TOKEN` – optional Hugging Face token for higher rate limits.
-   - `PROVIDERS` – comma-separated list of organisation IDs to mirror.
-   - `DATABASE_URL` – e.g. `postgresql://user:password@host:5432/silicon_river`.
-   - `VITE_API_BASE` – URL of the FastAPI service (default `http://localhost:8000`).
+   Then update:
+   - `HF_TOKEN` (optional): Hugging Face token for higher rate limits.
+   - `PROVIDERS` (required): Comma-separated list of provider IDs to mirror.
+   - `DATABASE_URL`: PostgreSQL connection string, e.g. `postgresql://user:password@host:5432/silicon_river`.
+   - `VITE_API_BASE`: FastAPI base URL, defaults to `http://localhost:8000`.
 4. **Initialise the schema**
    ```bash
    python scripts/init_db.py
@@ -78,32 +117,44 @@ SiliconRiver/
    cd backend
    uvicorn main:app --reload --port 8000
    ```
-7. **Launch the frontend** (separate terminal)
+7. **Launch the frontend** (new terminal)
    ```bash
    cd frontend
    npm install
    npm run dev
    ```
-   Visit `http://localhost:5173/` – the app proxies API requests to `VITE_API_BASE`.
+   Visit `http://localhost:5173/`; the dev server proxies API calls to `VITE_API_BASE`.
 
-## API Overview
-- `GET /api/models` – paginated catalogue (`page`, `page_size`, `provider`, `tag`, `search`).
-- `GET /api/models/{model_id}` – single model details.
-- `GET /api/stats/providers` – model counts grouped by provider.
-- `GET /api/timeline` – timeline-ready slice filtered by preset (30d / 6m / 1y) or custom year.
-- `GET /health` – simple health probe.
+## API Surface
+| Endpoint | Description | Query Parameters |
+|----------|-------------|------------------|
+| `GET /api/models` | Paginated catalogue of models | `page`, `page_size`, `provider`, `tag`, `search` |
+| `GET /api/models/{model_id}` | Single model details | None |
+| `GET /api/timeline` | Timeline slice by preset or custom year | `preset`, `year`, `page`, `page_size`, `sort` |
+| `GET /api/stats/providers` | Provider-level model counts | None |
+| `GET /health` | Health probe | None |
 
-## Testing
-```bash
-pytest
-```
-The ingestion tests require a PostgreSQL database. Set `TEST_DATABASE_URL` before running the suite to point to a disposable database; the test module truncates `models` and `sync_log` between runs.
+## Data Refresh Workflow
+- Schedule `python src/scraper/fetch_models.py` with cron, GitHub Actions, or another job runner.
+- Monitor `sync_log` for processed versus inserted totals, run status, and errors.
+- Consider pruning or archiving historical records if the catalogue grows quickly.
+
+## Testing & Quality
+- Set `TEST_DATABASE_URL` to a disposable PostgreSQL instance and run `pytest`.
+- Tests reset `models` and `sync_log` between runs to keep expectations deterministic.
+- Manually check `/health` and `/api/stats/providers` after seeding to confirm API connectivity.
 
 ## Deployment Notes
-- **Scheduled refresh**: run `python src/scraper/fetch_models.py` from GitHub Actions, Render Cron, or another scheduler to keep the catalogue current.
-- **Database**: the application expects a PostgreSQL DSN (only `postgresql://` URIs are supported by the default helpers).
-- **Backend hosting**: e.g. Render web service (`uvicorn main:app --host 0.0.0.0 --port 8000`). Ensure the DB is reachable and seeded.
-- **Frontend hosting**: build with `npm run build` and deploy the static `frontend/dist/` directory (Vercel, Netlify, etc.).
+- **Backend**: `uvicorn main:app --host 0.0.0.0 --port 8000` with `DATABASE_URL` configured and outbound access to Hugging Face if scraping in the same environment.
+- **Frontend**: `npm run build` to produce `frontend/dist/`, then host the static bundle (Vercel, Netlify, Cloudflare Pages, etc.).
+- **Database**: PostgreSQL required; run `python scripts/init_db.py` during provisioning to ensure the schema exists.
+- **Secrets management**: Store tokens and DSNs in your platform secret store instead of committing `.env` files.
+
+## Known Limitations & Future Improvements
+- Timestamps are stored as text; migrating to `TIMESTAMP WITH TIME ZONE` would unlock richer SQL analytics.
+- Ensure static assets and docs are served as UTF-8 to keep international text readable.
+- Frontend currently focuses on browsing; consider adding search suggestions, sorting options, or richer model detail pages.
+- Large provider catalogues may require pagination tuning (for example a smaller timeline `page_size`) to keep responses fast.
 
 ## License
-MIT License – see [LICENSE](LICENSE).
+MIT License - see [LICENSE](LICENSE).
