@@ -32,27 +32,45 @@ const formatDateLabel = (date: Date) =>
 
 const createLabelSprite = (text: string) => {
   const canvas = document.createElement("canvas");
-  const size = 256;
-  canvas.width = size;
-  canvas.height = size;
+  const width = 640;
+  const height = 256;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("Canvas not supported");
   }
 
-  context.clearRect(0, 0, size, size);
-  context.fillStyle = "rgba(15,23,42,0.85)";
-  context.fillRect(0, size / 2 - 32, size, 64);
-  context.fillStyle = "#f8fafc";
-  context.font = "34px sans-serif";
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "rgba(255,255,255,0.9)";
+  const barHeight = 112;
+  const radius = 48;
+
+  context.beginPath();
+  context.moveTo(radius, height / 2 - barHeight / 2);
+  context.lineTo(width - radius, height / 2 - barHeight / 2);
+  context.quadraticCurveTo(width, height / 2 - barHeight / 2, width, height / 2);
+  context.quadraticCurveTo(width, height / 2 + barHeight / 2, width - radius, height / 2 + barHeight / 2);
+  context.lineTo(radius, height / 2 + barHeight / 2);
+  context.quadraticCurveTo(0, height / 2 + barHeight / 2, 0, height / 2);
+  context.quadraticCurveTo(0, height / 2 - barHeight / 2, radius, height / 2 - barHeight / 2);
+  context.closePath();
+  context.fill();
+
+  context.strokeStyle = "rgba(15,23,42,0.14)";
+  context.lineWidth = 6;
+  context.stroke();
+
+  context.fillStyle = "#0f172a";
+  context.font = "88px sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(text, size / 2, size / 2);
+  context.fillText(text, width / 2, height / 2);
 
   const texture = new THREE.CanvasTexture(canvas);
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
   const sprite = new THREE.Sprite(material);
-  const scale = 3.4;
+  const scale = 4.2;
   sprite.scale.set((scale * canvas.width) / canvas.height, scale, 1);
   return sprite;
 };
@@ -79,11 +97,19 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     tooltip.style.zIndex = "10";
     container.appendChild(tooltip);
 
+    const focusBubble = document.createElement("div");
+    focusBubble.className =
+      "pointer-events-none w-60 max-w-xs rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors";
+    focusBubble.style.position = "absolute";
+    focusBubble.style.visibility = "hidden";
+    focusBubble.style.zIndex = "9";
+    container.appendChild(focusBubble);
+
     const width = container.clientWidth;
     const height = CANVAS_HEIGHT;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x020617);
+    scene.background = new THREE.Color(0xffffff);
 
     const camera = new THREE.PerspectiveCamera(48, width / height, 0.1, 1000);
     camera.position.copy(CAMERA_POSITION);
@@ -147,7 +173,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     scene.add(timelineGroup);
 
     const markerGeometry = new THREE.SphereGeometry(0.7, 18, 18);
-    const markers: Array<{
+    type MarkerEntry = {
       mesh: ThreeMesh;
       basePosition: ThreeVector3;
       model: TimelineModel;
@@ -157,7 +183,8 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       currentOpacity: number;
       targetOpacity: number;
       targetColor: ThreeColor;
-    }> = [];
+    };
+    const markers: MarkerEntry[] = [];
 
     sorted.forEach((model) => {
       const created = new Date(model.created_at).getTime();
@@ -185,6 +212,29 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         targetColor: new THREE.Color(COLOR_BASE),
       });
     });
+
+    const focusPosition = new THREE.Vector3();
+    let activeMarker: MarkerEntry | null = null;
+
+    const renderFocusBubble = (marker: MarkerEntry | null) => {
+      if (!marker) {
+        activeMarker = null;
+        focusBubble.style.visibility = "hidden";
+        focusBubble.style.transform = "translate(-9999px, -9999px)";
+        return;
+      }
+      const { model } = marker;
+      const createdAt = new Date(model.created_at).toLocaleString();
+      const description = model.description ? model.description.slice(0, 120) : "";
+      focusBubble.innerHTML = `
+        <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
+        <div class="mt-0.5 text-sm font-medium text-text-secondary">${model.model_name}</div>
+        <div class="mt-1 text-[11px] text-text-muted">${createdAt}</div>
+        ${description ? `<div class="mt-2 text-[11px] leading-relaxed text-text-secondary">${description}</div>` : ""}
+      `;
+      focusBubble.style.visibility = "visible";
+      activeMarker = marker;
+    };
 
     const axisGroup = new THREE.Group();
     const axisMaterial = new THREE.LineBasicMaterial({ color: 0x475569 });
@@ -220,6 +270,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const applyFocus = () => {
       if (!markers.length) {
+        renderFocusBubble(null);
         return;
       }
       highlightIndex = Math.max(0, Math.min(highlightIndex, markers.length - 1));
@@ -227,6 +278,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       const offset = focusAnchor.clone().sub(targetMarker.basePosition);
       targetTimelineOffset = offset;
       targetCameraFocus = focusAnchor.clone();
+      renderFocusBubble(targetMarker);
 
       markers.forEach((entry, index) => {
         if (index === highlightIndex) {
@@ -239,8 +291,8 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         const distance = index - highlightIndex;
         if (distance < 0) {
           const backward = Math.abs(distance);
-          entry.targetScale = backward === 1 ? 0.9 : backward === 2 ? 0.75 : 0.6;
-          entry.targetOpacity = backward === 1 ? 0.25 : backward === 2 ? 0.12 : 0;
+          entry.targetScale = backward === 1 ? 0.95 : backward === 2 ? 0.8 : 0.7;
+          entry.targetOpacity = backward === 1 ? 0.55 : backward === 2 ? 0.4 : 0.3;
           entry.targetColor = baseColor.clone();
         } else {
           entry.targetScale = distance === 1 ? 1.15 : distance === 2 ? 1.05 : 1.0;
@@ -325,6 +377,21 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         entry.material.color.lerp(entry.targetColor, 0.2);
       });
 
+      const viewportWidth = renderer.domElement.clientWidth;
+      const viewportHeight = renderer.domElement.clientHeight;
+      if (activeMarker) {
+        focusPosition.copy(activeMarker.basePosition).add(timelineGroup.position);
+        const projected = focusPosition.clone().project(camera);
+        if (projected.z < -1 || projected.z > 1) {
+          focusBubble.style.visibility = "hidden";
+        } else {
+          const screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
+          const screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
+          focusBubble.style.visibility = "visible";
+          focusBubble.style.transform = `translate(${screenX}px, ${screenY}px) translate(-50%, -120%)`;
+        }
+      }
+
       renderer.render(scene, camera);
       animationId = requestAnimationFrame(animate);
     };
@@ -337,6 +404,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
       renderer.domElement.removeEventListener("wheel", handleWheel);
       tooltip.remove();
+      focusBubble.remove();
       controls.dispose();
       tubeGeometry.dispose();
       tubeMaterial.dispose();
