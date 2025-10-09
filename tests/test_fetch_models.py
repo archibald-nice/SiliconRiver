@@ -92,6 +92,24 @@ def test_fetch_and_store_inserts(monkeypatch):
     assert payload["page_size"] == 5
     assert payload["start"] <= payload["end"]
 
+    provider_response = client.get(
+        "/api/timeline",
+        params={"preset": "1y", "page_size": 5, "sort": "asc", "provider": "meta-llama"},
+    )
+    assert provider_response.status_code == 200
+    provider_payload = provider_response.json()
+    assert provider_payload["items"]
+    assert all(item["provider"] == "meta-llama" for item in provider_payload["items"])
+
+    search_response = client.get(
+        "/api/timeline",
+        params={"preset": "1y", "page_size": 5, "sort": "asc", "model_name": "Llama-2"},
+    )
+    assert search_response.status_code == 200
+    search_payload = search_response.json()
+    assert search_payload["items"]
+    assert all("llama-2" in item["model_name"].lower() for item in search_payload["items"])
+
 
 @pytest.mark.parametrize("raw, expected", [
     ("meta-llama, google ", ["meta-llama", "google"]),

@@ -70,6 +70,8 @@ export const fetchTimeline = async (params: {
   page?: number;
   page_size?: number;
   sort?: "asc" | "desc";
+  provider?: string | null;
+  model_name?: string;
 }) => {
   const query: Record<string, unknown> = {};
   if (params.preset) {
@@ -86,6 +88,12 @@ export const fetchTimeline = async (params: {
   }
   if (params.sort) {
     query.sort = params.sort;
+  }
+  if (params.provider) {
+    query.provider = params.provider;
+  }
+  if (params.model_name) {
+    query.model_name = params.model_name;
   }
   const { data } = await api.get<TimelineResponse>("/api/timeline", { params: query });
   return data;
