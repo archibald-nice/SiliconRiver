@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS models (
 );
 """
 
+PROVIDERS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS providers (
+    provider_id TEXT PRIMARY KEY,
+    display_name TEXT,
+    avatar_url TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 SYNC_LOG_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS sync_log (
     id BIGSERIAL PRIMARY KEY,
@@ -58,6 +68,8 @@ CREATE TABLE IF NOT EXISTS model_tags (
 """
 
 INDICES_SQL: Iterable[str] = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_provider_id ON providers(provider_id);",
+    "CREATE INDEX IF NOT EXISTS idx_providers_updated_at ON providers(updated_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_models_provider_created_at ON models(provider, created_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_models_inserted_at ON models(inserted_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_sync_log_provider_started_at ON sync_log(provider, started_at DESC);",
@@ -71,6 +83,7 @@ def create_schema(db_url: str | None = None) -> None:
     db_url = db_url or DEFAULT_DB_URL
     with psycopg.connect(db_url, autocommit=True) as conn:
         with conn.cursor() as cursor:
+            cursor.execute(PROVIDERS_TABLE_SQL)
             cursor.execute(MODEL_TABLE_SQL)
             cursor.execute(SYNC_LOG_TABLE_SQL)
             cursor.execute(MODEL_TAGS_TABLE_SQL)
