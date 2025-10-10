@@ -1,4 +1,4 @@
-"""Fetch Hugging Face models and persist them into PostgreSQL."""
+﻿"""Fetch Hugging Face models and persist them into PostgreSQL."""
 from __future__ import annotations
 
 import json
@@ -10,8 +10,12 @@ from pathlib import Path
 from typing import Iterable, List
 
 import psycopg
+import requests
 from dotenv import load_dotenv
 from huggingface_hub import HfApi, ModelInfo
+from huggingface_hub.utils import HfHubHTTPError
+from html.parser import HTMLParser
+from urllib.parse import urljoin
 
 try:
     from scripts.init_db import create_schema  # type: ignore
@@ -26,6 +30,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_PATH = BASE_DIR / ".env"
 DEFAULT_DB_URL = "postgresql://USER:PASSWORD@HOST:5432/silicon_river"
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+HTTP_TIMEOUT = 15
 
 
 @dataclass(slots=True)
@@ -44,7 +49,7 @@ class ModelRecord:
 
 def load_config() -> None:
     if ENV_PATH.exists():
-        load_dotenv(dotenv_path=ENV_PATH, override=False)
+        load_dotenv(dotenv_path=ENV_PATH, override=False, encoding="utf-8-sig")
 
 
 def resolve_db_url() -> str:
@@ -110,6 +115,191 @@ def ensure_db(url: str | None = None) -> psycopg.Connection:
         create_schema(db_url)
     conn = psycopg.connect(db_url)
     return conn
+
+
+def upsert_provider(
+    conn: psycopg.Connection,
+    provider_id: str,
+    avatar_url: str | None,
+    display_name: str | None,
+) -> None:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO providers (provider_id, display_name, avatar_url, updated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (provider_id) DO UPDATE
+            SET
+                display_name = EXCLUDED.display_name,
+                avatar_url = EXCLUDED.avatar_url,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (provider_id, display_name, avatar_url),
+        )
+
+
+def _extract_display_name(info: object, provider_id: str) -> str:
+    candidates = ("displayName", "fullname", "name")
+    if isinstance(info, dict):
+        for key in candidates:
+            value = info.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        nested = info.get("organization") or info.get("user")
+        if isinstance(nested, dict):
+            for key in candidates:
+                value = nested.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+        return info.get("id") or info.get("uid") or provider_id
+    for attr in candidates:
+        value = getattr(info, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    return getattr(info, "id", provider_id)
+
+
+def _extract_avatar_url(info: object) -> str | None:
+    candidates = ("avatarUrl", "avatar_url", "avatar")
+    if isinstance(info, dict):
+        for key in candidates:
+            value = info.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        nested = info.get("organization") or info.get("user")
+        if isinstance(nested, dict):
+            for key in candidates:
+                value = nested.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+        return None
+    for attr in candidates:
+        value = getattr(info, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def resolve_provider_profile(client: HfApi, provider_id: str) -> tuple[str, str | None]:
+    resolver_sets = (
+        ("organization_info", "get_org"),
+        ("user_info", "get_user"),
+    )
+    for resolver_names in resolver_sets:
+        resolver = next((getattr(client, name) for name in resolver_names if hasattr(client, name)), None)
+        if resolver is None:
+            continue
+        try:
+            info = resolver(provider_id)
+        except HfHubHTTPError as error:
+            if getattr(error, "response", None) is not None and error.response.status_code == 404:
+                continue
+            LOGGER.warning("Failed to fetch %s for %s: %s", resolver_name, provider_id, error)
+            continue
+        except Exception as exc:  # pragma: no cover - unexpected
+            LOGGER.warning("Unexpected error calling %s for %s: %s", resolver_name, provider_id, exc)
+            continue
+        info_object = info.dict() if hasattr(info, "dict") else info
+        display_name = _extract_display_name(info_object, provider_id)
+        avatar_url = _extract_avatar_url(info_object)
+        if avatar_url is None:
+            LOGGER.debug("Provider %s missing avatar in %s payload: %s", provider_id, resolver_name, info_object)
+        return display_name, avatar_url
+    token = os.getenv("HF_TOKEN")
+    display_name, avatar_url = fetch_provider_profile_http(provider_id, token)
+    return display_name, avatar_url
+
+
+def _http_get_json(url: str, token: str | None) -> dict | None:
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        response = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT)
+    except requests.RequestException as exc:
+        LOGGER.debug("HTTP metadata request failed %s: %s", url, exc)
+        return None
+    if response.status_code == 404:
+        return None
+    if not response.ok:
+        LOGGER.debug("HTTP metadata request %s returned %s: %s", url, response.status_code, response.text)
+        return None
+    try:
+        return response.json()
+    except ValueError:
+        LOGGER.debug("HTTP metadata response from %s is not JSON", url)
+        return None
+
+
+def fetch_provider_profile_http(provider_id: str, token: str | None) -> tuple[str, str | None]:
+    endpoints = (
+        f"https://huggingface.co/api/organizations/{provider_id}",
+        f"https://huggingface.co/api/users/{provider_id}",
+    )
+    for url in endpoints:
+        payload = _http_get_json(url, token)
+        if not payload:
+            continue
+        display_name = _extract_display_name(payload, provider_id)
+        avatar_url = _extract_avatar_url(payload)
+        if avatar_url or display_name != provider_id:
+            return display_name, avatar_url
+    display_name, avatar_url = fetch_provider_profile_html(provider_id)
+    return display_name, avatar_url
+
+
+class _ProfileHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.meta: dict[str, str] = {}
+        self._h1_active = False
+        self.heading: list[str] = []
+        self.img_candidates: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = {key: value for key, value in attrs if value is not None}
+        if tag == "meta":
+            prop = attrs_dict.get("property")
+            content = attrs_dict.get("content")
+            if prop in {"og:image", "og:title"} and content:
+                self.meta[prop] = content
+        elif tag == "h1":
+            self._h1_active = True
+        elif tag == "img":
+            src = attrs_dict.get("src")
+            if src:
+                classes = attrs_dict.get("class", "")
+                if any(keyword in classes for keyword in ("object-cover", "avatar", "rounded-full")):
+                    self.img_candidates.append(src)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "h1":
+            self._h1_active = False
+
+    def handle_data(self, data: str) -> None:
+        if self._h1_active and data.strip():
+            self.heading.append(data.strip())
+
+
+def fetch_provider_profile_html(provider_id: str) -> tuple[str, str | None]:
+    url = f"https://huggingface.co/{provider_id}"
+    try:
+        response = requests.get(url, headers={"Accept": "text/html"}, timeout=HTTP_TIMEOUT)
+    except requests.RequestException as exc:
+        LOGGER.debug("HTML metadata request failed %s: %s", url, exc)
+        return provider_id, None
+    if not response.ok:
+        LOGGER.debug("HTML metadata request %s returned %s", url, response.status_code)
+        return provider_id, None
+
+    parser = _ProfileHTMLParser()
+    parser.feed(response.text)
+
+    display_name = parser.meta.get("og:title") or (" ".join(parser.heading).strip() if parser.heading else provider_id)
+    raw_avatar = next(iter(parser.img_candidates), None) or parser.meta.get("og:image")
+    avatar_url = urljoin(url, raw_avatar) if raw_avatar else None
+    return display_name or provider_id, avatar_url
+    return provider_id, None
 
 
 def save_models(conn: psycopg.Connection, provider: str, records: Iterable[ModelRecord], *, started_at: datetime) -> tuple[int, int]:
@@ -186,6 +376,11 @@ def fetch_and_store(limit: int = 50) -> dict[str, tuple[int, int]]:
     with ensure_db() as conn:
         for provider in providers:
             LOGGER.info("Fetching models for provider %s", provider)
+            display_name, avatar_url = resolve_provider_profile(client, provider)
+            try:
+                upsert_provider(conn, provider, avatar_url, display_name)
+            except Exception as exc:  # pragma: no cover - database failure
+                LOGGER.warning("Failed to upsert provider %s metadata: %s", provider, exc)
             models_iter = client.list_models(
                 author=provider,
                 sort="lastModified",
@@ -205,4 +400,3 @@ if __name__ == "__main__":
     summary = fetch_and_store()
     for provider, (processed, inserted) in summary.items():
         print(f"{provider}: processed={processed} inserted={inserted}")
-
