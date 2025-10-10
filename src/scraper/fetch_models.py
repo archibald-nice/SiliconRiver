@@ -139,7 +139,22 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     record.inserted_at,
                 ),
             )
-            if cursor.rowcount:
+            inserted_row = cursor.rowcount
+            cursor.execute("DELETE FROM model_tags WHERE model_id = %s", (record.model_id,))
+            if record.tags:
+                tag_rows = [
+                    (record.model_id, tag, record.inserted_at)
+                    for tag in record.tags
+                ]
+                cursor.executemany(
+                    """
+                    INSERT INTO model_tags (model_id, tag, inserted_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (model_id, tag) DO UPDATE SET inserted_at = EXCLUDED.inserted_at
+                    """,
+                    tag_rows,
+                )
+            if inserted_row:
                 inserted += 1
         finished_at = datetime.now(timezone.utc)
         cursor.execute(
