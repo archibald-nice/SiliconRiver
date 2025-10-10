@@ -46,10 +46,23 @@ CREATE TABLE IF NOT EXISTS sync_log (
 );
 """
 
+MODEL_TAGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS model_tags (
+    id BIGSERIAL PRIMARY KEY,
+    model_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    inserted_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+    UNIQUE (model_id, tag),
+    FOREIGN KEY (model_id) REFERENCES models(model_id) ON DELETE CASCADE
+);
+"""
+
 INDICES_SQL: Iterable[str] = (
     "CREATE INDEX IF NOT EXISTS idx_models_provider_created_at ON models(provider, created_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_models_inserted_at ON models(inserted_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_sync_log_provider_started_at ON sync_log(provider, started_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_model_tags_tag ON model_tags(tag);",
+    "CREATE INDEX IF NOT EXISTS idx_model_tags_model_id ON model_tags(model_id);",
 )
 
 
@@ -60,6 +73,7 @@ def create_schema(db_url: str | None = None) -> None:
         with conn.cursor() as cursor:
             cursor.execute(MODEL_TABLE_SQL)
             cursor.execute(SYNC_LOG_TABLE_SQL)
+            cursor.execute(MODEL_TAGS_TABLE_SQL)
             for statement in INDICES_SQL:
                 cursor.execute(statement)
 

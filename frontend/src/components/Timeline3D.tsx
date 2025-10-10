@@ -20,6 +20,17 @@ const COLOR_BASE = 0xfacc15;
 const COLOR_ACTIVE = 0xfb923c;
 const COLOR_LINE = 0x1e293b;
 
+const BASE_START_ANGLE = -Math.PI * 1.25;
+const BASE_END_ANGLE = Math.PI * 1.4;
+const BASE_START_RADIUS = 26;
+const BASE_END_RADIUS = 6;
+const BASE_START_HEIGHT = -16;
+const BASE_END_HEIGHT = 14;
+const BASE_DEPTH_SHIFT = -28;
+const BASE_WAVE_AMPLITUDE = 4.2;
+const COUNT_LOWER_BOUND = 12;
+const COUNT_UPPER_BOUND = 220;
+
 type ThreeMesh = InstanceType<typeof THREE.Mesh>;
 type ThreeVector3 = InstanceType<typeof THREE.Vector3>;
 type ThreeMeshStandardMaterial = InstanceType<typeof THREE.MeshStandardMaterial>;
@@ -75,23 +86,48 @@ const createLabelSprite = (text: string) => {
   return sprite;
 };
 
+const remapSampleCount = (count: number) => {
+  if (count <= COUNT_LOWER_BOUND) {
+    return 0;
+  }
+  if (count >= COUNT_UPPER_BOUND) {
+    return 1;
+  }
+  return (count - COUNT_LOWER_BOUND) / (COUNT_UPPER_BOUND - COUNT_LOWER_BOUND);
+};
+
 const buildTimelineCurve = (sampleCount: number) => {
-  const segments = Math.max(sampleCount * 2, 36);
+  const safeCount = Math.max(sampleCount, 1);
+  const density = remapSampleCount(safeCount);
+  const lengthMultiplier = THREE.MathUtils.lerp(0.72, 2.08, density);
+  const angleCenter = (BASE_START_ANGLE + BASE_END_ANGLE) / 2;
+  const baseSpan = BASE_END_ANGLE - BASE_START_ANGLE;
+  const angleSpan = baseSpan * lengthMultiplier;
+  const startAngle = angleCenter - angleSpan / 2;
+  const endAngle = angleCenter + angleSpan / 2;
+
+  const radiusScale = THREE.MathUtils.lerp(0.78, 1.18, density);
+  const startRadius = BASE_START_RADIUS * radiusScale;
+  const endRadius = BASE_END_RADIUS * THREE.MathUtils.lerp(0.9, 1.08, density);
+
+  const heightScale = THREE.MathUtils.lerp(0.84, 1.36, density);
+  const startHeight = BASE_START_HEIGHT * heightScale;
+  const endHeight = BASE_END_HEIGHT * heightScale;
+
+  const depthScale = THREE.MathUtils.lerp(0.72, 1.5, density);
+  const depthShift = BASE_DEPTH_SHIFT * depthScale;
+
+  const waveAmplitude = BASE_WAVE_AMPLITUDE * THREE.MathUtils.lerp(0.7, 1.28, density);
+
+  const segments = Math.max(Math.round(safeCount * THREE.MathUtils.lerp(2, 4.2, density)), 48);
   const points: ThreeVector3[] = [];
-  const startAngle = -Math.PI * 1.25;
-  const endAngle = Math.PI * 1.4;
-  const startRadius = 26;
-  const endRadius = 6;
-  const startHeight = -16;
-  const endHeight = 14;
-  const depthShift = -28;
 
   for (let index = 0; index < segments; index += 1) {
     const t = segments > 1 ? index / (segments - 1) : 0;
     const easedRadius = THREE.MathUtils.lerp(startRadius, endRadius, Math.pow(t, 0.88));
     const angle = THREE.MathUtils.lerp(startAngle, endAngle, t);
     const baseHeight = THREE.MathUtils.lerp(startHeight, endHeight, t);
-    const wave = Math.sin(t * Math.PI * 1.15) * 4.2 * (1 - t * 0.4);
+    const wave = Math.sin(t * Math.PI * 1.15) * waveAmplitude * (1 - t * 0.4);
     const x = Math.cos(angle) * easedRadius;
     const z = Math.sin(angle) * easedRadius + depthShift * (1 - t * 0.7);
     const y = baseHeight + wave;
@@ -119,6 +155,9 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     container.innerHTML = "";
 
+    const width = container.clientWidth;
+    const height = CANVAS_HEIGHT;
+
     const tooltip = document.createElement("div");
     tooltip.className =
       "pointer-events-none rounded-md border border-border-default bg-surface-overlay px-3 py-2 text-xs text-text-primary shadow-lg shadow-accent transition-colors";
@@ -127,16 +166,47 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     tooltip.style.zIndex = "10";
     container.appendChild(tooltip);
 
-    const focusBubble = document.createElement("div");
-    focusBubble.className =
+    const focusPrimaryBubble = document.createElement("div");
+    focusPrimaryBubble.className =
       "pointer-events-auto w-60 max-w-xs rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors select-text";
-    focusBubble.style.position = "absolute";
-    focusBubble.style.visibility = "hidden";
-    focusBubble.style.zIndex = "9";
-    container.appendChild(focusBubble);
+    focusPrimaryBubble.style.position = "absolute";
+    focusPrimaryBubble.style.visibility = "hidden";
+    focusPrimaryBubble.style.zIndex = "9";
+    container.appendChild(focusPrimaryBubble);
 
-    const width = container.clientWidth;
-    const height = CANVAS_HEIGHT;
+    const focusMetaBubble = document.createElement("div");
+    focusMetaBubble.className =
+      "pointer-events-none rounded-md border border-border-default bg-surface-overlay px-3 py-2 text-[11px] text-text-secondary shadow-md shadow-accent transition-colors";
+    focusMetaBubble.style.position = "absolute";
+    focusMetaBubble.style.visibility = "hidden";
+    focusMetaBubble.style.zIndex = "9";
+    container.appendChild(focusMetaBubble);
+
+    const leaderSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    leaderSvg.setAttribute("width", `${width}`);
+    leaderSvg.setAttribute("height", `${height}`);
+    leaderSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    leaderSvg.style.position = "absolute";
+    leaderSvg.style.top = "0";
+    leaderSvg.style.left = "0";
+    leaderSvg.style.pointerEvents = "none";
+    leaderSvg.style.visibility = "hidden";
+    container.appendChild(leaderSvg);
+
+    const primaryLeader = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    primaryLeader.setAttribute("stroke", "#94a3b8");
+    primaryLeader.setAttribute("stroke-width", "1.6");
+    primaryLeader.setAttribute("stroke-linecap", "round");
+    primaryLeader.setAttribute("stroke-opacity", "0.85");
+    leaderSvg.appendChild(primaryLeader);
+
+    const metaLeader = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    metaLeader.setAttribute("stroke", "#cbd5f5");
+    metaLeader.setAttribute("stroke-width", "1.2");
+    metaLeader.setAttribute("stroke-linecap", "round");
+    metaLeader.setAttribute("stroke-dasharray", "6 6");
+    metaLeader.setAttribute("stroke-opacity", "0.75");
+    leaderSvg.appendChild(metaLeader);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xffffff);
@@ -228,54 +298,101 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     const focusPosition = new THREE.Vector3();
     let activeMarker: MarkerEntry | null = null;
 
-    const renderFocusBubble = (marker: MarkerEntry | null) => {
+    const renderFocusBubbles = (marker: MarkerEntry | null) => {
       if (!marker) {
         activeMarker = null;
-        focusBubble.style.visibility = "hidden";
-        focusBubble.style.transform = "translate(-9999px, -9999px)";
+        focusPrimaryBubble.style.visibility = "hidden";
+        focusMetaBubble.style.visibility = "hidden";
+        leaderSvg.style.visibility = "hidden";
         return;
       }
       const { model } = marker;
       const createdAt = new Date(model.created_at).toLocaleString();
       const description = model.description ? model.description.slice(0, 120) : "";
-      focusBubble.innerHTML = `
+      focusPrimaryBubble.innerHTML = `
         <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
         <div class="mt-0.5 text-sm font-medium text-text-secondary">${model.model_name}</div>
-        <div class="mt-1 text-[11px] text-text-muted">${createdAt}</div>
         ${description ? `<div class="mt-2 text-[11px] leading-relaxed text-text-secondary">${description}</div>` : ""}
       `;
-      focusBubble.style.visibility = "visible";
+      focusPrimaryBubble.style.visibility = "visible";
+
+      focusMetaBubble.innerHTML = `
+        <div class="text-[10px] uppercase tracking-wide text-text-muted">模型发布时间</div>
+        <div class="mt-1 text-xs font-medium text-text-primary">${createdAt}</div>
+      `;
+      focusMetaBubble.style.visibility = "visible";
+
       activeMarker = marker;
     };
+
+    const curveSamples = baseCurve.getPoints(Math.max(Math.round(sorted.length * 3.2), 160));
+    let sumX = 0;
+    let sumZ = 0;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    curveSamples.forEach((sample) => {
+      sumX += sample.x;
+      sumZ += sample.z;
+      if (sample.y < minY) {
+        minY = sample.y;
+      }
+      if (sample.y > maxY) {
+        maxY = sample.y;
+      }
+    });
+    const hasSamples = curveSamples.length > 0;
+    const axisCenterX = hasSamples ? sumX / curveSamples.length : focusAnchor.x;
+    const axisCenterZ = hasSamples ? sumZ / curveSamples.length : focusAnchor.z;
+    if (!Number.isFinite(minY)) {
+      minY = focusAnchor.y - 3;
+    }
+    if (!Number.isFinite(maxY)) {
+      maxY = focusAnchor.y + 3;
+    }
+    if (maxY - minY < 1) {
+      maxY = minY + 6;
+    }
 
     const axisGroup = new THREE.Group();
     const axisMaterial = new THREE.LineBasicMaterial({ color: 0x475569 });
     const arrowMaterial = new THREE.MeshBasicMaterial({ color: 0x475569 });
     const arrowGeometry = new THREE.ConeGeometry(0.38, 1.2, 12);
     arrowGeometry.translate(0, -0.6, 0);
-    const axisStart = baseCurve.getPointAt(0).clone().add(new THREE.Vector3(-1, -6, -2));
-    const axisEnd = baseCurve.getPointAt(1).clone().add(new THREE.Vector3(1.5, -6, 2));
+
+    const axisStart = new THREE.Vector3(axisCenterX, minY - 2.4, axisCenterZ);
+    const axisEnd = new THREE.Vector3(axisCenterX, maxY + 2.4, axisCenterZ);
     const axisGeometry = new THREE.BufferGeometry().setFromPoints([axisStart, axisEnd]);
     axisGroup.add(new THREE.Line(axisGeometry, axisMaterial));
+
     const axisDirection = axisEnd.clone().sub(axisStart).normalize();
     const arrowHead = new THREE.Mesh(arrowGeometry, arrowMaterial);
     arrowHead.position.copy(axisEnd);
     arrowHead.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axisDirection);
     axisGroup.add(arrowHead);
 
+    const axisVector = axisEnd.clone().sub(axisStart);
+    const axisLength = axisVector.length();
     const tickCount = Math.min(8, Math.max(sorted.length, 2));
+
     for (let i = 0; i < tickCount; i += 1) {
       const fraction = i / Math.max(tickCount - 1, 1);
-      const point = baseCurve.getPointAt(fraction);
-      const tickBase = point.clone().add(new THREE.Vector3(0, -6, 0));
-      const tickGeometry = new THREE.BufferGeometry().setFromPoints([
-        tickBase,
-        tickBase.clone().add(new THREE.Vector3(0, 1.2, 0)),
-      ]);
+      const axisPoint = axisStart.clone().add(axisDirection.clone().multiplyScalar(axisLength * fraction));
+      const curvePoint = baseCurve.getPointAt(fraction);
+      const radial = curvePoint.clone().sub(axisPoint);
+      if (radial.lengthSq() < 1e-5) {
+        radial.set(1.4, 0, 0);
+      }
+      const radialLength = THREE.MathUtils.clamp(radial.length() * 0.68, 1.2, 4.2);
+      radial.setLength(radialLength);
+
+      const tickOuter = axisPoint.clone().add(radial);
+      const tickGeometry = new THREE.BufferGeometry().setFromPoints([axisPoint, tickOuter]);
       axisGroup.add(new THREE.Line(tickGeometry, axisMaterial));
+
       const labelDate = new Date(minTime + span * fraction);
       const sprite = createLabelSprite(formatDateLabel(labelDate));
-      sprite.position.set(point.x + 0.6, tickBase.y - 0.8, point.z);
+      const labelPosition = tickOuter.clone().add(radial.clone().setLength(0.6)).add(new THREE.Vector3(0, 0.9, 0));
+      sprite.position.copy(labelPosition);
       axisGroup.add(sprite);
     }
     timelineGroup.add(axisGroup);
@@ -314,7 +431,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const applyFocus = () => {
       if (!markers.length) {
-        renderFocusBubble(null);
+        renderFocusBubbles(null);
         return;
       }
       highlightIndex = Math.max(0, Math.min(highlightIndex, markers.length - 1));
@@ -322,7 +439,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       const offset = focusAnchor.clone().sub(targetMarker.basePosition);
       targetTimelineOffset = offset;
       targetCameraFocus = focusAnchor.clone();
-      renderFocusBubble(targetMarker);
+      renderFocusBubbles(targetMarker);
 
       markers.forEach((entry, index) => {
         if (index === highlightIndex) {
@@ -434,6 +551,9 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       camera.aspect = newWidth / height;
       camera.updateProjectionMatrix();
       renderer.setSize(newWidth, height);
+      leaderSvg.setAttribute("width", `${newWidth}`);
+      leaderSvg.setAttribute("height", `${height}`);
+      leaderSvg.setAttribute("viewBox", `0 0 ${newWidth} ${height}`);
     };
     window.addEventListener("resize", handleResize);
 
@@ -461,13 +581,60 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         focusPosition.copy(activeMarker.basePosition).add(timelineGroup.position);
         const projected = focusPosition.clone().project(camera);
         if (projected.z < -1 || projected.z > 1) {
-          focusBubble.style.visibility = "hidden";
+          focusPrimaryBubble.style.visibility = "hidden";
+          focusMetaBubble.style.visibility = "hidden";
+          leaderSvg.style.visibility = "hidden";
         } else {
           const screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
           const screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
-          focusBubble.style.visibility = "visible";
-          focusBubble.style.transform = `translate(${screenX}px, ${screenY}px) translate(-50%, -120%)`;
+
+          const padding = 12;
+          const primaryOffsets = { x: 78, y: -170 };
+          const metaOffsets = { x: 78, y: 28 };
+
+          const positionBubble = (bubble: HTMLDivElement, offsetX: number, offsetY: number) => {
+            const widthPx = bubble.offsetWidth || 0;
+            const heightPx = bubble.offsetHeight || 0;
+            let left = screenX + offsetX;
+            let top = screenY + offsetY;
+            left = THREE.MathUtils.clamp(left, padding, viewportWidth - widthPx - padding);
+            top = THREE.MathUtils.clamp(top, padding, viewportHeight - heightPx - padding);
+            bubble.style.left = `${left}px`;
+            bubble.style.top = `${top}px`;
+            return { left, top, width: widthPx, height: heightPx };
+          };
+
+          const primaryRect = positionBubble(focusPrimaryBubble, primaryOffsets.x, primaryOffsets.y);
+          const metaRect = positionBubble(focusMetaBubble, metaOffsets.x, metaOffsets.y);
+
+          focusPrimaryBubble.style.visibility = "visible";
+          focusMetaBubble.style.visibility = "visible";
+
+          const markerX = screenX;
+          const markerY = screenY;
+          leaderSvg.style.visibility = "visible";
+          leaderSvg.setAttribute("width", `${viewportWidth}`);
+          leaderSvg.setAttribute("height", `${viewportHeight}`);
+          leaderSvg.setAttribute("viewBox", `0 0 ${viewportWidth} ${viewportHeight}`);
+
+          const primaryAnchorX = primaryRect.left;
+          const primaryAnchorY = primaryRect.top + primaryRect.height / 2;
+          primaryLeader.setAttribute("x1", `${markerX}`);
+          primaryLeader.setAttribute("y1", `${markerY}`);
+          primaryLeader.setAttribute("x2", `${primaryAnchorX}`);
+          primaryLeader.setAttribute("y2", `${primaryAnchorY}`);
+
+          const metaAnchorX = metaRect.left;
+          const metaAnchorY = metaRect.top + metaRect.height / 2;
+          metaLeader.setAttribute("x1", `${markerX - 8}`);
+          metaLeader.setAttribute("y1", `${markerY + 10}`);
+          metaLeader.setAttribute("x2", `${metaAnchorX}`);
+          metaLeader.setAttribute("y2", `${metaAnchorY}`);
         }
+      } else {
+        focusPrimaryBubble.style.visibility = "hidden";
+        focusMetaBubble.style.visibility = "hidden";
+        leaderSvg.style.visibility = "hidden";
       }
 
       renderer.render(scene, camera);
@@ -484,7 +651,9 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       renderer.domElement.removeEventListener("wheel", handleWheel);
       tooltip.remove();
-      focusBubble.remove();
+      focusPrimaryBubble.remove();
+      focusMetaBubble.remove();
+      leaderSvg.remove();
       controls.dispose();
       tubeGeometry.dispose();
       tubeMaterial.dispose();
