@@ -3,3 +3,4 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 psycopg[binary]==3.2.1
 python-dotenv==1.1.1
+httpx==0.22.0

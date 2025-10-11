@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS providers (
     display_name TEXT,
     avatar_url TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    avatar_mime TEXT,
+    avatar_blob BYTEA
 );
 """
 

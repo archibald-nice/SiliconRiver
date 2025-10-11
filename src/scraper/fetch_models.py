@@ -31,6 +31,7 @@ ENV_PATH = BASE_DIR / ".env"
 DEFAULT_DB_URL = "postgresql://USER:PASSWORD@HOST:5432/silicon_river"
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 HTTP_TIMEOUT = 15
+AVATAR_MAX_BYTES = int(os.getenv("AVATAR_MAX_BYTES", "524288"))
 
 
 @dataclass(slots=True)
@@ -122,19 +123,23 @@ def upsert_provider(
     provider_id: str,
     avatar_url: str | None,
     display_name: str | None,
+    avatar_content: bytes | None,
+    avatar_mime: str | None,
 ) -> None:
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO providers (provider_id, display_name, avatar_url, updated_at)
-            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            INSERT INTO providers (provider_id, display_name, avatar_url, avatar_blob, avatar_mime, updated_at)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (provider_id) DO UPDATE
             SET
                 display_name = EXCLUDED.display_name,
                 avatar_url = EXCLUDED.avatar_url,
+                avatar_blob = EXCLUDED.avatar_blob,
+                avatar_mime = EXCLUDED.avatar_mime,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (provider_id, display_name, avatar_url),
+            (provider_id, display_name, avatar_url, avatar_content, avatar_mime),
         )
 
 
@@ -181,13 +186,19 @@ def _extract_avatar_url(info: object) -> str | None:
 
 
 def resolve_provider_profile(client: HfApi, provider_id: str) -> tuple[str, str | None]:
-    resolver_sets = (
+    resolver_groups = (
         ("organization_info", "get_org"),
         ("user_info", "get_user"),
     )
-    for resolver_names in resolver_sets:
-        resolver = next((getattr(client, name) for name in resolver_names if hasattr(client, name)), None)
-        if resolver is None:
+    for resolver_names in resolver_groups:
+        resolver = None
+        resolver_name = None
+        for name in resolver_names:
+            if hasattr(client, name):
+                resolver = getattr(client, name)
+                resolver_name = name
+                break
+        if resolver is None or resolver_name is None:
             continue
         try:
             info = resolver(provider_id)
@@ -248,6 +259,30 @@ def fetch_provider_profile_http(provider_id: str, token: str | None) -> tuple[st
     return display_name, avatar_url
 
 
+def download_provider_avatar(avatar_url: str | None, token: str | None) -> tuple[bytes | None, str | None]:
+    if not avatar_url:
+        return None, None
+    headers = {"Accept": "image/*"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        response = requests.get(avatar_url, headers=headers, timeout=HTTP_TIMEOUT)
+    except requests.RequestException as exc:
+        LOGGER.debug("Avatar download failed %s: %s", avatar_url, exc)
+        return None, None
+    if not response.ok:
+        LOGGER.debug("Avatar download %s returned %s", avatar_url, response.status_code)
+        return None, None
+    content = response.content
+    if len(content) > AVATAR_MAX_BYTES:
+        LOGGER.debug("Avatar %s exceeds max bytes (%s)", avatar_url, AVATAR_MAX_BYTES)
+        return None, None
+    content_type = response.headers.get("content-type")
+    if content_type:
+        content_type = content_type.split(";")[0].strip()
+    return content, content_type
+
+
 class _ProfileHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -299,7 +334,6 @@ def fetch_provider_profile_html(provider_id: str) -> tuple[str, str | None]:
     raw_avatar = next(iter(parser.img_candidates), None) or parser.meta.get("og:image")
     avatar_url = urljoin(url, raw_avatar) if raw_avatar else None
     return display_name or provider_id, avatar_url
-    return provider_id, None
 
 
 def save_models(conn: psycopg.Connection, provider: str, records: Iterable[ModelRecord], *, started_at: datetime) -> tuple[int, int]:
@@ -373,12 +407,14 @@ def fetch_and_store(limit: int = 50) -> dict[str, tuple[int, int]]:
         raise RuntimeError("PROVIDERS is not configured. Set it in environment or .env file.")
 
     results: dict[str, tuple[int, int]] = {}
+    token = os.getenv("HF_TOKEN")
     with ensure_db() as conn:
         for provider in providers:
             LOGGER.info("Fetching models for provider %s", provider)
             display_name, avatar_url = resolve_provider_profile(client, provider)
+            avatar_content, avatar_mime = download_provider_avatar(avatar_url, token)
             try:
-                upsert_provider(conn, provider, avatar_url, display_name)
+                upsert_provider(conn, provider, avatar_url, display_name, avatar_content, avatar_mime)
             except Exception as exc:  # pragma: no cover - database failure
                 LOGGER.warning("Failed to upsert provider %s metadata: %s", provider, exc)
             models_iter = client.list_models(
