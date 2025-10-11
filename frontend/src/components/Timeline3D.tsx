@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { TimelineModel } from "../api/client";
+import { buildProviderAvatarUrl } from "../api/client";
 
 type Timeline3DProps = {
   models: TimelineModel[];
@@ -298,6 +299,9 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     const focusPosition = new THREE.Vector3();
     let activeMarker: MarkerEntry | null = null;
 
+    const escapeAttribute = (value: string) =>
+      value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
     const renderFocusBubbles = (marker: MarkerEntry | null) => {
       if (!marker) {
         activeMarker = null;
@@ -309,9 +313,23 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       const { model } = marker;
       const createdAt = new Date(model.created_at).toLocaleString();
       const description = model.description ? model.description.slice(0, 120) : "";
+      const providerInitial = model.provider ? model.provider.trim().charAt(0).toUpperCase() || "?" : "?";
+      const safeProviderAttr = escapeAttribute(model.provider ?? "");
+      const avatarUrl = model.avatar_url ? buildProviderAvatarUrl(model.provider) : null;
+      const avatarMarkup = avatarUrl
+        ? `<div class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-surface-base text-sm font-semibold text-text-secondary">
+            <span class="z-10">${providerInitial}</span>
+            <img src="${avatarUrl}" alt="${safeProviderAttr}" class="absolute inset-0 h-full w-full object-cover" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.display='none';" />
+           </div>`
+        : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-surface-base text-sm font-semibold text-text-secondary">${providerInitial}</div>`;
       focusPrimaryBubble.innerHTML = `
-        <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
-        <div class="mt-0.5 text-sm font-medium text-text-secondary">${model.model_name}</div>
+        <div class="flex items-start gap-3">
+          ${avatarMarkup}
+          <div class="min-w-0 flex-1">
+            <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
+            <div class="mt-0.5 text-sm font-medium text-text-secondary break-words">${model.model_name}</div>
+          </div>
+        </div>
         ${description ? `<div class="mt-2 text-[11px] leading-relaxed text-text-secondary">${description}</div>` : ""}
       `;
       focusPrimaryBubble.style.visibility = "visible";

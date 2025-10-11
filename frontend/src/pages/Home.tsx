@@ -1,11 +1,12 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchStats, fetchTimeline, type ProviderStat, type TimelineResponse } from "../api/client";
+import { buildProviderAvatarUrl, fetchStats, fetchTimeline, type ProviderStat, type TimelineResponse } from "../api/client";
 import Timeline3D from "../components/Timeline3D";
 import TimelineFilters, { TimelinePresetRange } from "../components/TimelineFilters";
 
 const TIMELINE_PAGE_SIZE = 200;
+const prefetchedAvatars = new Set<string>();
 
 const Home = () => {
   const [timelineRange, setTimelineRange] = useState<TimelinePresetRange>("30d");
@@ -40,6 +41,26 @@ const Home = () => {
   const timelineItems = timelineData?.items ?? [];
   const timelineTotal = timelineData?.total ?? 0;
   const timelineTotalPages = timelineData ? Math.max(1, Math.ceil(timelineData.total / timelineData.page_size)) : 1;
+
+  useEffect(() => {
+    if (!timelineData) {
+      return;
+    }
+    timelineData.items.forEach((item) => {
+      if (!item.avatar_url) {
+        return;
+      }
+      const provider = item.provider;
+      if (!provider || prefetchedAvatars.has(provider)) {
+        return;
+      }
+      prefetchedAvatars.add(provider);
+      const img = new Image();
+      img.referrerPolicy = "no-referrer";
+      img.decoding = "async";
+      img.src = buildProviderAvatarUrl(provider);
+    });
+  }, [timelineData]);
 
   const onTimelinePageChange = useCallback(
     (direction: "prev" | "next") => {
