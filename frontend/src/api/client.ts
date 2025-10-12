@@ -45,6 +45,10 @@ export interface TimelineModel {
   model_card_url: string;
   tags: string[];
   avatar_url?: string;
+  is_open_source?: boolean | null;
+  price?: Record<string, unknown> | string | null;
+  opencompass_rank?: number | null;
+  huggingface_rank?: number | null;
 }
 
 export interface TimelineResponse {
@@ -78,6 +82,7 @@ export const fetchTimeline = async (params: {
   sort?: "asc" | "desc";
   provider?: string | null;
   model_name?: string;
+  open_source?: boolean | null;
 }) => {
   const query: Record<string, unknown> = {};
   if (params.preset) {
@@ -100,6 +105,9 @@ export const fetchTimeline = async (params: {
   }
   if (params.model_name) {
     query.model_name = params.model_name;
+  }
+  if (typeof params.open_source === "boolean") {
+    query.open_source = params.open_source ? "true" : "false";
   }
   const { data } = await api.get<TimelineResponse>("/api/timeline", { params: query });
   return data;
