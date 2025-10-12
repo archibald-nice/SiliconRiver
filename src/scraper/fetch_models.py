@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional, Dict
 
 import psycopg
 import requests
@@ -46,6 +46,10 @@ class ModelRecord:
     likes: int | None
     model_card_url: str
     inserted_at: str
+    is_open_source: Optional[bool]
+    price: Optional[Dict[str, object]]
+    opencompass_rank: Optional[int]
+    huggingface_rank: Optional[int]
 
 
 def load_config() -> None:
@@ -95,6 +99,11 @@ def to_record(provider: str, info: ModelInfo) -> ModelRecord:
     inserted_at = format_timestamp(datetime.now(timezone.utc))
     downloads = getattr(info, "downloads", None)
     likes = getattr(info, "likes", None)
+    private_attr = getattr(info, "private", None)
+    if private_attr is None:
+        is_open_source = None
+    else:
+        is_open_source = True if private_attr is None else not bool(private_attr)
 
     return ModelRecord(
         model_id=info.modelId,
@@ -107,6 +116,10 @@ def to_record(provider: str, info: ModelInfo) -> ModelRecord:
         likes=likes,
         model_card_url=f"https://huggingface.co/{info.modelId}",
         inserted_at=inserted_at,
+        is_open_source=is_open_source,
+        price=None,
+        opencompass_rank=None,
+        huggingface_rank=None,
     )
 
 
@@ -346,9 +359,23 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                 """
                 INSERT INTO models (
                     model_id, provider, model_name, description, tags,
-                    created_at, downloads, likes, model_card_url, inserted_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (model_id) DO NOTHING
+                    created_at, downloads, likes, model_card_url, inserted_at,
+                    is_open_source, price, opencompass_rank, huggingface_rank
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (model_id) DO UPDATE SET
+                    provider = EXCLUDED.provider,
+                    model_name = EXCLUDED.model_name,
+                    description = EXCLUDED.description,
+                    tags = EXCLUDED.tags,
+                    created_at = EXCLUDED.created_at,
+                    downloads = EXCLUDED.downloads,
+                    likes = EXCLUDED.likes,
+                    model_card_url = EXCLUDED.model_card_url,
+                    inserted_at = EXCLUDED.inserted_at,
+                    is_open_source = EXCLUDED.is_open_source,
+                    price = COALESCE(EXCLUDED.price, models.price),
+                    opencompass_rank = COALESCE(EXCLUDED.opencompass_rank, models.opencompass_rank),
+                    huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank)
                 """,
                 (
                     record.model_id,
@@ -361,6 +388,10 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     record.likes,
                     record.model_card_url,
                     record.inserted_at,
+                    record.is_open_source,
+                    json.dumps(record.price, ensure_ascii=False) if record.price is not None else None,
+                    record.opencompass_rank,
+                    record.huggingface_rank,
                 ),
             )
             inserted_row = cursor.rowcount

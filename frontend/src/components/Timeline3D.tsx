@@ -318,8 +318,16 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       const avatarUrl = model.avatar_url ? buildProviderAvatarUrl(model.provider) : null;
       const avatarMarkup = avatarUrl
         ? `<div class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-surface-base text-sm font-semibold text-text-secondary">
-            <span class="z-10">${providerInitial}</span>
-            <img src="${avatarUrl}" alt="${safeProviderAttr}" class="absolute inset-0 h-full w-full object-cover" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.display='none';" />
+            <span class="absolute inset-0 flex items-center justify-center transition-opacity avatar-placeholder">${providerInitial}</span>
+            <img
+              src="${avatarUrl}"
+              alt="${safeProviderAttr}"
+              class="absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-200"
+              referrerpolicy="no-referrer"
+              loading="lazy"
+              onload="const placeholder=this.previousElementSibling; if(placeholder){placeholder.style.display='none';} this.style.opacity='1';"
+              onerror="this.style.display='none'; const placeholder=this.previousElementSibling; if(placeholder){placeholder.style.display='flex'; placeholder.style.opacity='1';}"
+            />
            </div>`
         : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-surface-base text-sm font-semibold text-text-secondary">${providerInitial}</div>`;
       focusPrimaryBubble.innerHTML = `
