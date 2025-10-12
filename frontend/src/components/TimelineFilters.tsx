@@ -12,6 +12,8 @@ type TimelineFiltersProps = {
   onModelQueryChange: (value: string) => void;
   onModelQuerySubmit: () => void;
   onModelQueryClear: () => void;
+  openSourceFilter: "all" | "open" | "closed";
+  onOpenSourceChange: (value: "all" | "open" | "closed") => void;
   onPresetChange: (range: TimelinePresetRange) => void;
   onCustomYearChange: (year: number | null) => void;
 };
@@ -20,6 +22,12 @@ const PRESET_OPTIONS: { label: string; value: TimelinePresetRange; description: 
   { label: "Last 30 days", value: "30d", description: "Show models from the last 30 days" },
   { label: "Last 6 months", value: "6m", description: "Show models from the last 6 months" },
   { label: "This year", value: "1y", description: "Show models from the current year" },
+];
+
+const OPEN_SOURCE_OPTIONS: { label: string; value: "all" | "open" | "closed"; description: string }[] = [
+  { label: "All", value: "all", description: "Show all models" },
+  { label: "Open Source", value: "open", description: "Show open-source models only" },
+  { label: "Closed Source", value: "closed", description: "Show closed-source models only" },
 ];
 
 const TimelineFilters = ({
@@ -32,6 +40,8 @@ const TimelineFilters = ({
   onModelQueryChange,
   onModelQuerySubmit,
   onModelQueryClear,
+  openSourceFilter,
+  onOpenSourceChange,
   onPresetChange,
   onCustomYearChange,
 }: TimelineFiltersProps) => {
@@ -63,7 +73,9 @@ const TimelineFilters = ({
             type="button"
             onClick={() => onPresetChange(preset.value)}
             className={`rounded-full px-4 py-2 transition ${
-              activeRange === preset.value ? "bg-accent-base text-accent-contrast shadow-sm" : "bg-surface-chip text-text-secondary hover:text-text-primary"
+              activeRange === preset.value
+                ? "bg-accent-base text-accent-contrast shadow-sm"
+                : "bg-surface-chip text-text-secondary hover:text-text-primary"
             }`}
           >
             {preset.label}
@@ -99,7 +111,10 @@ const TimelineFilters = ({
 
       {providers.length > 0 ? (
         <div className="space-y-2 border-t border-border-default pt-4">
-          <label htmlFor={providerSelectId} className="block text-xs font-semibold uppercase tracking-wide text-text-muted">
+          <label
+            htmlFor={providerSelectId}
+            className="block text-xs font-semibold uppercase tracking-wide text-text-muted"
+          >
             Provider
           </label>
           <select
@@ -128,7 +143,31 @@ const TimelineFilters = ({
       ) : null}
 
       <div className="space-y-2 border-t border-border-default pt-4">
-        <label htmlFor={modelSearchId} className="block text-xs font-semibold uppercase tracking-wide text-text-muted">
+        <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">Model type</p>
+        <div className="flex flex-wrap gap-2">
+          {OPEN_SOURCE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => onOpenSourceChange(option.value)}
+              className={`rounded-full px-3 py-1.5 text-xs transition ${
+                openSourceFilter === option.value
+                  ? "bg-accent-base text-accent-contrast shadow-sm"
+                  : "bg-surface-chip text-text-secondary hover:text-text-primary"
+              }`}
+              title={option.description}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2 border-t border-border-default pt-4">
+        <label
+          htmlFor={modelSearchId}
+          className="block text-xs font-semibold uppercase tracking-wide text-text-muted"
+        >
           Model name
         </label>
         <form
@@ -143,7 +182,7 @@ const TimelineFilters = ({
             type="search"
             value={modelQuery}
             onChange={(event) => onModelQueryChange(event.target.value)}
-            placeholder="例如：Llama"
+            placeholder="e.g. Llama"
             className="flex-1 rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
           />
           <div className="flex gap-2">
