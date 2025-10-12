@@ -32,6 +32,54 @@ const BASE_WAVE_AMPLITUDE = 4.2;
 const COUNT_LOWER_BOUND = 12;
 const COUNT_UPPER_BOUND = 220;
 
+const normalisePriceObject = (price: unknown): Record<string, unknown> | null => {
+  if (!price) {
+    return null;
+  }
+  if (typeof price === "string") {
+    try {
+      const parsed = JSON.parse(price);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof price === "object" && !Array.isArray(price)) {
+    return price as Record<string, unknown>;
+  }
+  return null;
+};
+
+const renderPriceMarkup = (price: unknown): string => {
+  const priceObject = normalisePriceObject(price);
+  if (!priceObject) {
+    return "";
+  }
+  const formatEntry = (label: string, value: unknown) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      return null;
+    }
+    const dollarsPerMillion = (numeric * 1_000_000).toFixed(2);
+    return `<div class="leading-relaxed">${label}: $${dollarsPerMillion}/M</div>`;
+  };
+  const promptEntry = formatEntry("Input Token", priceObject.prompt);
+  const completionEntry = formatEntry("Output Token", priceObject.completion);
+  if (!promptEntry && !completionEntry) {
+    return "";
+  }
+  return `
+    <div class="mt-2 space-y-1 text-[11px] text-text-muted">
+      ${[promptEntry, completionEntry].filter(Boolean).join("")}
+    </div>
+  `;
+};
+
+
+
 type ThreeMesh = InstanceType<typeof THREE.Mesh>;
 type ThreeVector3 = InstanceType<typeof THREE.Vector3>;
 type ThreeMeshStandardMaterial = InstanceType<typeof THREE.MeshStandardMaterial>;
@@ -175,14 +223,6 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     focusPrimaryBubble.style.zIndex = "9";
     container.appendChild(focusPrimaryBubble);
 
-    const focusMetaBubble = document.createElement("div");
-    focusMetaBubble.className =
-      "pointer-events-none rounded-md border border-border-default bg-surface-overlay px-3 py-2 text-[11px] text-text-secondary shadow-md shadow-accent transition-colors";
-    focusMetaBubble.style.position = "absolute";
-    focusMetaBubble.style.visibility = "hidden";
-    focusMetaBubble.style.zIndex = "9";
-    container.appendChild(focusMetaBubble);
-
     const leaderSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     leaderSvg.setAttribute("width", `${width}`);
     leaderSvg.setAttribute("height", `${height}`);
@@ -201,13 +241,6 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     primaryLeader.setAttribute("stroke-opacity", "0.85");
     leaderSvg.appendChild(primaryLeader);
 
-    const metaLeader = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    metaLeader.setAttribute("stroke", "#cbd5f5");
-    metaLeader.setAttribute("stroke-width", "1.2");
-    metaLeader.setAttribute("stroke-linecap", "round");
-    metaLeader.setAttribute("stroke-dasharray", "6 6");
-    metaLeader.setAttribute("stroke-opacity", "0.75");
-    leaderSvg.appendChild(metaLeader);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xffffff);
@@ -306,7 +339,6 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       if (!marker) {
         activeMarker = null;
         focusPrimaryBubble.style.visibility = "hidden";
-        focusMetaBubble.style.visibility = "hidden";
         leaderSvg.style.visibility = "hidden";
         return;
       }
@@ -330,23 +362,37 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
             />
            </div>`
         : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-surface-base text-sm font-semibold text-text-secondary">${providerInitial}</div>`;
+      const isOpenSource = model.is_open_source !== false;
+      const licenseLabel = isOpenSource ? "开源" : "闭源";
+      const licenseClass = isOpenSource
+        ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+        : "bg-rose-500/10 text-rose-400 border border-rose-500/30";
+      const priceMarkup = !isOpenSource ? renderPriceMarkup(model.price) : "";
+      const priceFallback =
+        !isOpenSource && !priceMarkup
+          ? `<div class="mt-2 text-[11px] text-text-muted">暂无价格信息</div>`
+          : "";
       focusPrimaryBubble.innerHTML = `
         <div class="flex items-start gap-3">
           ${avatarMarkup}
           <div class="min-w-0 flex-1">
             <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
             <div class="mt-0.5 text-sm font-medium text-text-secondary break-words">${model.model_name}</div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-medium ${licenseClass}">${licenseLabel}</span>
+              ${
+                !isOpenSource && priceMarkup
+                  ? '<span class="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-medium text-amber-400">价格</span>'
+                  : ""
+              }
+            </div>
+            <div class="mt-2 text-[11px] text-text-muted">发布时间：${createdAt}</div>
           </div>
         </div>
         ${description ? `<div class="mt-2 text-[11px] leading-relaxed text-text-secondary">${description}</div>` : ""}
+        ${priceMarkup || priceFallback}
       `;
       focusPrimaryBubble.style.visibility = "visible";
-
-      focusMetaBubble.innerHTML = `
-        <div class="text-[10px] uppercase tracking-wide text-text-muted">模型发布时间</div>
-        <div class="mt-1 text-xs font-medium text-text-primary">${createdAt}</div>
-      `;
-      focusMetaBubble.style.visibility = "visible";
 
       activeMarker = marker;
     };
@@ -608,7 +654,6 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         const projected = focusPosition.clone().project(camera);
         if (projected.z < -1 || projected.z > 1) {
           focusPrimaryBubble.style.visibility = "hidden";
-          focusMetaBubble.style.visibility = "hidden";
           leaderSvg.style.visibility = "hidden";
         } else {
           const screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
@@ -616,7 +661,6 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
           const padding = 12;
           const primaryOffsets = { x: 78, y: -170 };
-          const metaOffsets = { x: 78, y: 28 };
 
           const positionBubble = (bubble: HTMLDivElement, offsetX: number, offsetY: number) => {
             const widthPx = bubble.offsetWidth || 0;
@@ -631,10 +675,8 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
           };
 
           const primaryRect = positionBubble(focusPrimaryBubble, primaryOffsets.x, primaryOffsets.y);
-          const metaRect = positionBubble(focusMetaBubble, metaOffsets.x, metaOffsets.y);
 
           focusPrimaryBubble.style.visibility = "visible";
-          focusMetaBubble.style.visibility = "visible";
 
           const markerX = screenX;
           const markerY = screenY;
@@ -649,17 +691,9 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
           primaryLeader.setAttribute("y1", `${markerY}`);
           primaryLeader.setAttribute("x2", `${primaryAnchorX}`);
           primaryLeader.setAttribute("y2", `${primaryAnchorY}`);
-
-          const metaAnchorX = metaRect.left;
-          const metaAnchorY = metaRect.top + metaRect.height / 2;
-          metaLeader.setAttribute("x1", `${markerX - 8}`);
-          metaLeader.setAttribute("y1", `${markerY + 10}`);
-          metaLeader.setAttribute("x2", `${metaAnchorX}`);
-          metaLeader.setAttribute("y2", `${metaAnchorY}`);
         }
       } else {
         focusPrimaryBubble.style.visibility = "hidden";
-        focusMetaBubble.style.visibility = "hidden";
         leaderSvg.style.visibility = "hidden";
       }
 
@@ -678,7 +712,6 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       renderer.domElement.removeEventListener("wheel", handleWheel);
       tooltip.remove();
       focusPrimaryBubble.remove();
-      focusMetaBubble.remove();
       leaderSvg.remove();
       controls.dispose();
       tubeGeometry.dispose();
@@ -702,3 +735,4 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 };
 
 export default Timeline3D;
+

@@ -5,7 +5,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import psycopg
 import httpx
@@ -66,6 +66,10 @@ class TimelineModel(BaseModel):
     model_card_url: str
     tags: List[str]
     avatar_url: Optional[str] = None
+    is_open_source: Optional[bool] = None
+    price: Optional[Dict[str, object]] = None
+    opencompass_rank: Optional[int] = None
+    huggingface_rank: Optional[int] = None
 
 
 class TimelineResponse(BaseModel):
@@ -192,6 +196,7 @@ async def timeline_models(
     sort: str = Query("asc", regex="^(asc|desc)"),
     provider: Optional[str] = Query(None),
     model_name: Optional[str] = Query(None),
+    open_source: Optional[bool] = Query(None),
     conn: psycopg.Connection = Depends(get_db),
 ):
     start_dt, end_dt, label = _calculate_timeline_window(preset=preset, year=year)
@@ -208,6 +213,10 @@ async def timeline_models(
     if model_name:
         filters.append("m.model_name ILIKE %s")
         params.append(f"%{model_name}%")
+    if open_source is True:
+        filters.append("m.is_open_source = TRUE")
+    elif open_source is False:
+        filters.append("(m.is_open_source = FALSE OR m.is_open_source IS NULL)")
 
     where_clause = " AND ".join(filters)
 
@@ -234,7 +243,11 @@ async def timeline_models(
                 m.tags,
                 m.created_at,
                 m.model_card_url,
-                p.avatar_url
+                p.avatar_url,
+                m.is_open_source,
+                m.price,
+                m.opencompass_rank,
+                m.huggingface_rank
             FROM models AS m
             LEFT JOIN providers AS p ON m.provider = p.provider_id
             WHERE {where_clause}
@@ -255,6 +268,10 @@ async def timeline_models(
             model_card_url=row["model_card_url"],
             tags=_parse_tags(row["tags"]),
             avatar_url=row.get("avatar_url"),
+            is_open_source=row.get("is_open_source"),
+            price=row.get("price"),
+            opencompass_rank=row.get("opencompass_rank"),
+            huggingface_rank=row.get("huggingface_rank"),
         )
         for row in rows
     ]
