@@ -15,6 +15,7 @@ const Home = () => {
   const [timelineProvider, setTimelineProvider] = useState<string | null>(null);
   const [timelineSearchInput, setTimelineSearchInput] = useState("");
   const [timelineSearchFilter, setTimelineSearchFilter] = useState("");
+  const [timelineOpenSource, setTimelineOpenSource] = useState<"all" | "open" | "closed">("all");
 
   const { data: providerStats } = useQuery<ProviderStat[]>({
     queryKey: ["provider-stats"],
@@ -25,7 +26,15 @@ const Home = () => {
   const providerOptions = useMemo(() => providerStats?.map((item) => item.provider) ?? [], [providerStats]);
 
   const { data: timelineData, isLoading: isTimelineLoading } = useQuery<TimelineResponse>({
-    queryKey: ["timeline", timelineRange, timelineYear, timelinePage, timelineProvider, timelineSearchFilter],
+    queryKey: [
+      "timeline",
+      timelineRange,
+      timelineYear,
+      timelinePage,
+      timelineProvider,
+      timelineSearchFilter,
+      timelineOpenSource,
+    ],
     queryFn: () =>
       fetchTimeline({
         preset: timelineRange,
@@ -35,6 +44,8 @@ const Home = () => {
         sort: "asc",
         provider: timelineProvider,
         model_name: timelineSearchFilter || undefined,
+        open_source:
+          timelineOpenSource === "all" ? null : timelineOpenSource === "open" ? true : false,
       }),
   });
 
@@ -137,6 +148,11 @@ const Home = () => {
               } else {
                 setTimelineRange("30d");
               }
+              setTimelinePage(1);
+            }}
+            openSourceFilter={timelineOpenSource}
+            onOpenSourceChange={(value) => {
+              setTimelineOpenSource(value);
               setTimelinePage(1);
             }}
           />
