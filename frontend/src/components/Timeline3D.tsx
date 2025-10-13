@@ -224,6 +224,36 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     focusPrimaryBubble.style.zIndex = "9";
     container.appendChild(focusPrimaryBubble);
 
+    const createPreviewBubble = () => {
+      const bubble = document.createElement("div");
+      bubble.className =
+        "pointer-events-none inline-flex min-w-[12rem] max-w-xs items-center gap-2 rounded-lg border border-border-default bg-surface-overlay px-3 py-2 text-[11px] text-text-secondary shadow-lg shadow-accent transition-colors";
+      bubble.style.position = "absolute";
+      bubble.style.visibility = "hidden";
+      bubble.style.zIndex = "8";
+      return bubble;
+    };
+
+    const focusPrevBubble = createPreviewBubble();
+    const focusNextBubble = createPreviewBubble();
+    container.appendChild(focusPrevBubble);
+    container.appendChild(focusNextBubble);
+
+    const createHint = (text: string) => {
+      const hint = document.createElement("div");
+      hint.className = "pointer-events-none text-[10px] font-semibold uppercase tracking-wide text-text-muted";
+      hint.textContent = text;
+      hint.style.position = "absolute";
+      hint.style.visibility = "hidden";
+      hint.style.zIndex = "6";
+      return hint;
+    };
+
+    const nextHintLabel = createHint("Next...");
+    const prevHintLabel = createHint("Prev...");
+    container.appendChild(nextHintLabel);
+    container.appendChild(prevHintLabel);
+
     const priceTooltip = document.createElement("div");
     priceTooltip.className =
       "pointer-events-none max-w-xs rounded-lg border border-border-default bg-surface-overlay px-3 py-2 text-[11px] text-text-primary shadow-lg shadow-accent transition-opacity";
@@ -347,9 +377,61 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const focusPosition = new THREE.Vector3();
     let activeMarker: MarkerEntry | null = null;
+    let previousMarker: MarkerEntry | null = null;
+    let nextMarker: MarkerEntry | null = null;
+    let lastFocusDirection = 0;
 
     const escapeAttribute = (value: string) =>
       value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const buildPreviewMarkup = (model: TimelineModel) => {
+      const provider = escapeAttribute(model.provider ?? "");
+      const avatarUrl = model.avatar_url ? buildProviderAvatarUrl(model.provider) : null;
+      const providerInitial = model.provider ? model.provider.trim().charAt(0).toUpperCase() || "?" : "?";
+      const avatar = avatarUrl
+        ? `<div class="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-surface-base text-xs font-semibold text-text-secondary">
+            <span class="absolute inset-0 flex items-center justify-center transition-opacity avatar-placeholder">${providerInitial}</span>
+            <img
+              src="${avatarUrl}"
+              alt="${provider}"
+              class="absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-200"
+              referrerpolicy="no-referrer"
+              loading="lazy"
+              onload="const placeholder=this.previousElementSibling; if(placeholder){placeholder.style.display='none';} this.style.opacity='1';"
+              onerror="this.style.display='none'; const placeholder=this.previousElementSibling; if(placeholder){placeholder.style.display='flex'; placeholder.style.opacity='1';}"
+            />
+          </div>`
+        : `<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-default bg-surface-base text-xs font-semibold text-text-secondary">${providerInitial}</div>`;
+      return `
+        <div class="flex items-center gap-2">
+          ${avatar}
+          <div class="min-w-0 flex-1">
+            <div class="text-[10px] font-semibold uppercase tracking-wide text-accent-base">${provider}</div>
+            <div class="truncate text-[11px] font-medium text-text-primary">${escapeAttribute(model.model_name)}</div>
+          </div>
+        </div>
+      `;
+    };
+
+    const resetPreviewBubble = (bubble: HTMLDivElement) => {
+      bubble.style.visibility = "hidden";
+      bubble.innerHTML = "";
+    };
+
+    const animateBubble = (bubble: HTMLDivElement, direction: number) => {
+      const offset = direction === 0 ? 0 : direction > 0 ? -18 : 18;
+      bubble.style.willChange = "opacity, transform";
+      bubble.style.transition = "none";
+      bubble.style.opacity = "0";
+      bubble.style.transform = `translateY(${offset}px) scale(0.92)`;
+      void bubble.offsetHeight;
+      requestAnimationFrame(() => {
+        bubble.style.transition =
+          "opacity 260ms cubic-bezier(0.18, 0.72, 0.32, 1), transform 260ms cubic-bezier(0.18, 0.72, 0.32, 1)";
+        bubble.style.opacity = "1";
+        bubble.style.transform = "translateY(0) scale(1)";
+      });
+    };
 
     const renderFocusBubbles = (marker: MarkerEntry | null) => {
       if (!marker) {
@@ -357,6 +439,13 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         focusPrimaryBubble.style.visibility = "hidden";
         leaderSvg.style.visibility = "hidden";
         hidePriceTooltip();
+        previousMarker = null;
+        nextMarker = null;
+        resetPreviewBubble(focusPrevBubble);
+        resetPreviewBubble(focusNextBubble);
+        nextHintLabel.style.visibility = "hidden";
+        prevHintLabel.style.visibility = "hidden";
+        lastFocusDirection = 0;
         return;
       }
       const { model } = marker;
@@ -386,7 +475,14 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         : "bg-rose-500/10 text-rose-400 border border-rose-500/30";
       const priceTooltipMarkup =
         renderPriceTooltip(model.price) ??
-        (!isOpenSource ? '<div class="text-[11px] text-text-muted">暂无价格信息</div>' : null);
+        (!isOpenSource ? '<div class="text-[11px] text-text-muted">\u6682\u65e0\u4ef7\u683c\u4fe1\u606f</div>' : null);
+      const priceIconMarkup = isOpenSource
+        ? ""
+        : '<span class="timeline-license-tooltip inline-flex h-5 w-5 items-center justify-center rounded-full border border-amber-400 bg-amber-500/15 text-[10px] font-semibold text-amber-500 shadow-sm cursor-help" role="img" aria-label="Closed-source pricing info">$</span>';
+      const licenseChipMarkup = `<span class="timeline-license-chip inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-medium ${licenseClass}">${licenseLabel}</span>`;
+      const licenseSectionMarkup = priceIconMarkup
+        ? `<span class="inline-flex items-center gap-1">${licenseChipMarkup}${priceIconMarkup}</span>`
+        : licenseChipMarkup;
       const descriptionMarkup = description
         ? `<div class="w-full text-[11px] leading-relaxed text-text-muted break-words whitespace-normal">${description}</div>`
         : "";
@@ -399,7 +495,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
                 <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
                 <div class="mt-1 flex items-center gap-2">
                   <div class="flex-shrink-0 text-[13px] font-medium text-text-secondary whitespace-nowrap">${model.model_name}</div>
-                  <span class="timeline-license-chip inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-medium ${licenseClass}">${licenseLabel}</span>
+                  ${licenseSectionMarkup}
                 </div>
               </div>
             </div>
@@ -409,54 +505,84 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         </div>
       `;
       focusPrimaryBubble.style.visibility = "visible";
+      previousMarker = null;
+      nextMarker = null;
+      resetPreviewBubble(focusPrevBubble);
+      resetPreviewBubble(focusNextBubble);
+      nextHintLabel.style.visibility = "hidden";
+      prevHintLabel.style.visibility = "hidden";
+
+      const prevIndex = highlightIndex + 1;
+      if (prevIndex < markers.length) {
+        previousMarker = markers[prevIndex];
+        focusPrevBubble.innerHTML = buildPreviewMarkup(previousMarker.model);
+        focusPrevBubble.style.visibility = "visible";
+        animateBubble(focusPrevBubble, lastFocusDirection);
+        nextHintLabel.style.visibility = "visible";
+      }
+      const nextIndex = highlightIndex - 1;
+      if (nextIndex >= 0) {
+        nextMarker = markers[nextIndex];
+        focusNextBubble.innerHTML = buildPreviewMarkup(nextMarker.model);
+        focusNextBubble.style.visibility = "visible";
+        animateBubble(focusNextBubble, -lastFocusDirection);
+        prevHintLabel.style.visibility = "visible";
+      }
+
+      animateBubble(focusPrimaryBubble, lastFocusDirection);
 
       const licenseChip = focusPrimaryBubble.querySelector<HTMLSpanElement>(".timeline-license-chip");
+      const priceTooltipTarget = focusPrimaryBubble.querySelector<HTMLSpanElement>(".timeline-license-tooltip");
       hidePriceTooltip();
       if (licenseChip) {
         licenseChip.onpointerenter = null;
         licenseChip.onpointerleave = null;
         licenseChip.onpointermove = null;
-        if (priceTooltipMarkup) {
-          licenseChip.style.cursor = "help";
-          const showTooltip = () => {
-            priceTooltip.innerHTML = priceTooltipMarkup;
-            priceTooltip.style.display = "block";
-            priceTooltip.style.visibility = "hidden";
-            const containerRect = container.getBoundingClientRect();
-            const chipRect = licenseChip.getBoundingClientRect();
-            const tooltipRect = priceTooltip.getBoundingClientRect();
-            const horizontalPadding = 8;
-            const verticalOffset = 10;
-            let left =
-              chipRect.left -
-              containerRect.left +
-              chipRect.width / 2 -
-              tooltipRect.width / 2;
-            left = THREE.MathUtils.clamp(
-              left,
-              horizontalPadding,
-              containerRect.width - tooltipRect.width - horizontalPadding,
-            );
-            let top = chipRect.top - containerRect.top - tooltipRect.height - verticalOffset;
-            if (top < horizontalPadding) {
-              top = chipRect.top - containerRect.top + chipRect.height + verticalOffset;
-            }
-            priceTooltip.style.left = `${left}px`;
-            priceTooltip.style.top = `${top}px`;
-            priceTooltip.style.visibility = "visible";
-          };
-          const handlePointerEnter = () => {
-            showTooltip();
-          };
-          const handlePointerLeave = () => {
-            hidePriceTooltip();
-          };
-          licenseChip.onpointerenter = handlePointerEnter;
-          licenseChip.onpointerleave = handlePointerLeave;
-          licenseChip.onpointermove = handlePointerEnter;
-        } else {
-          licenseChip.style.removeProperty("cursor");
-        }
+        licenseChip.style.removeProperty("cursor");
+      }
+      if (priceTooltipTarget && priceTooltipMarkup) {
+        priceTooltipTarget.onpointerenter = null;
+        priceTooltipTarget.onpointerleave = null;
+        priceTooltipTarget.onpointermove = null;
+        priceTooltipTarget.style.cursor = "help";
+        const showTooltip = () => {
+          priceTooltip.innerHTML = priceTooltipMarkup;
+          priceTooltip.style.display = "block";
+          priceTooltip.style.visibility = "hidden";
+          const containerRect = container.getBoundingClientRect();
+          const targetRect = priceTooltipTarget.getBoundingClientRect();
+          const tooltipRect = priceTooltip.getBoundingClientRect();
+          const horizontalPadding = 8;
+          const verticalOffset = 10;
+          let left =
+            targetRect.left -
+            containerRect.left +
+            targetRect.width / 2 -
+            tooltipRect.width / 2;
+          left = THREE.MathUtils.clamp(
+            left,
+            horizontalPadding,
+            containerRect.width - tooltipRect.width - horizontalPadding,
+          );
+          let top = targetRect.top - containerRect.top - tooltipRect.height - verticalOffset;
+          if (top < horizontalPadding) {
+            top = targetRect.top - containerRect.top + targetRect.height + verticalOffset;
+          }
+          priceTooltip.style.left = `${left}px`;
+          priceTooltip.style.top = `${top}px`;
+          priceTooltip.style.visibility = "visible";
+        };
+        const handlePointerEnter = () => {
+          showTooltip();
+        };
+        const handlePointerLeave = () => {
+          hidePriceTooltip();
+        };
+        priceTooltipTarget.onpointerenter = handlePointerEnter;
+        priceTooltipTarget.onpointerleave = handlePointerLeave;
+        priceTooltipTarget.onpointermove = handlePointerEnter;
+      } else if (priceTooltipTarget) {
+        priceTooltipTarget.style.removeProperty("cursor");
       }
 
       activeMarker = marker;
@@ -548,7 +674,10 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       }
       const clamped = THREE.MathUtils.clamp(index, 0, markers.length - 1);
       if (clamped !== highlightIndex) {
+        lastFocusDirection = clamped > highlightIndex ? 1 : -1;
         highlightIndex = clamped;
+      } else {
+        lastFocusDirection = 0;
       }
       applyFocus();
     };
@@ -674,9 +803,10 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const direction = Math.sign(event.deltaY);
+      const direction = -Math.sign(event.deltaY);
       const next = THREE.MathUtils.clamp(highlightIndex + direction * WHEEL_STEP, 0, markers.length - 1);
       if (next !== highlightIndex) {
+        lastFocusDirection = direction === 0 ? lastFocusDirection : direction;
         highlightIndex = next;
         applyFocus();
       }
@@ -721,6 +851,10 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
           focusPrimaryBubble.style.visibility = "hidden";
           leaderSvg.style.visibility = "hidden";
           hidePriceTooltip();
+          focusPrevBubble.style.visibility = "hidden";
+          focusNextBubble.style.visibility = "hidden";
+          nextHintLabel.style.visibility = "hidden";
+          prevHintLabel.style.visibility = "hidden";
         } else {
           const screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
           const screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
@@ -757,11 +891,87 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
           primaryLeader.setAttribute("y1", `${markerY}`);
           primaryLeader.setAttribute("x2", `${primaryAnchorX}`);
           primaryLeader.setAttribute("y2", `${primaryAnchorY}`);
+
+          const primaryRight = Math.min(primaryRect.left + primaryRect.width, viewportWidth - padding);
+
+          if (previousMarker) {
+            const prevWidth = focusPrevBubble.offsetWidth || 0;
+            const prevHeight = focusPrevBubble.offsetHeight || 0;
+            let prevLeft = primaryRight - prevWidth;
+            prevLeft = Math.max(padding, prevLeft);
+            const prevRight = prevLeft + prevWidth;
+            if (prevRight > viewportWidth - padding) {
+              prevLeft = viewportWidth - padding - prevWidth;
+            }
+            let prevTop = primaryRect.top - prevHeight - 12;
+            if (prevTop < padding) {
+              prevTop = padding;
+            }
+            if (prevTop + prevHeight > viewportHeight - padding) {
+              prevTop = viewportHeight - prevHeight - padding;
+            }
+            focusPrevBubble.style.left = `${prevLeft}px`;
+            focusPrevBubble.style.top = `${prevTop}px`;
+            focusPrevBubble.style.visibility = "visible";
+            const hintWidth = nextHintLabel.offsetWidth || 0;
+            const hintHeight = nextHintLabel.offsetHeight || 0;
+            let hintLeft = primaryRight - hintWidth;
+            hintLeft = Math.max(padding, Math.min(hintLeft, viewportWidth - padding - hintWidth));
+            let hintTop = prevTop - hintHeight - 6;
+            if (hintTop < padding) {
+              hintTop = padding;
+            }
+            nextHintLabel.style.left = `${hintLeft}px`;
+            nextHintLabel.style.top = `${hintTop}px`;
+            nextHintLabel.style.visibility = "visible";
+          } else {
+            focusPrevBubble.style.visibility = "hidden";
+            nextHintLabel.style.visibility = "hidden";
+          }
+
+          if (nextMarker) {
+            const nextWidth = focusNextBubble.offsetWidth || 0;
+            const nextHeight = focusNextBubble.offsetHeight || 0;
+            let nextLeft = primaryRight - nextWidth;
+            nextLeft = Math.max(padding, nextLeft);
+            const nextRight = nextLeft + nextWidth;
+            if (nextRight > viewportWidth - padding) {
+              nextLeft = viewportWidth - padding - nextWidth;
+            }
+            let nextTop = primaryRect.top + primaryRect.height + 12;
+            if (nextTop + nextHeight > viewportHeight - padding) {
+              nextTop = viewportHeight - nextHeight - padding;
+            }
+            if (nextTop < padding) {
+              nextTop = padding;
+            }
+            focusNextBubble.style.left = `${nextLeft}px`;
+            focusNextBubble.style.top = `${nextTop}px`;
+            focusNextBubble.style.visibility = "visible";
+            const hintWidth = prevHintLabel.offsetWidth || 0;
+            const hintHeight = prevHintLabel.offsetHeight || 0;
+            let hintLeft = primaryRight - hintWidth;
+            hintLeft = Math.max(padding, Math.min(hintLeft, viewportWidth - padding - hintWidth));
+            let hintTop = nextTop + nextHeight + 4;
+            if (hintTop + hintHeight > viewportHeight - padding) {
+              hintTop = viewportHeight - padding - hintHeight;
+            }
+            prevHintLabel.style.left = `${hintLeft}px`;
+            prevHintLabel.style.top = `${hintTop}px`;
+            prevHintLabel.style.visibility = "visible";
+          } else {
+            focusNextBubble.style.visibility = "hidden";
+            prevHintLabel.style.visibility = "hidden";
+          }
         }
       } else {
         focusPrimaryBubble.style.visibility = "hidden";
         leaderSvg.style.visibility = "hidden";
         hidePriceTooltip();
+        focusPrevBubble.style.visibility = "hidden";
+        focusNextBubble.style.visibility = "hidden";
+        nextHintLabel.style.visibility = "hidden";
+        prevHintLabel.style.visibility = "hidden";
       }
 
       renderer.render(scene, camera);
@@ -779,6 +989,10 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       renderer.domElement.removeEventListener("wheel", handleWheel);
       tooltip.remove();
       focusPrimaryBubble.remove();
+      focusPrevBubble.remove();
+      focusNextBubble.remove();
+      nextHintLabel.remove();
+      prevHintLabel.remove();
       priceTooltip.remove();
       leaderSvg.remove();
       controls.dispose();
