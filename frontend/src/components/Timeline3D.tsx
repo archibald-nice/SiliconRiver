@@ -53,32 +53,33 @@ const normalisePriceObject = (price: unknown): Record<string, unknown> | null =>
   return null;
 };
 
-const renderPriceMarkup = (price: unknown): string => {
+const renderPriceTooltip = (price: unknown): string | null => {
   const priceObject = normalisePriceObject(price);
   if (!priceObject) {
-    return "";
+    return null;
   }
+  const entries: string[] = [];
   const formatEntry = (label: string, value: unknown) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric) || numeric <= 0) {
       return null;
     }
     const dollarsPerMillion = (numeric * 1_000_000).toFixed(2);
-    return `<div class="leading-relaxed">${label}: $${dollarsPerMillion}/M</div>`;
+    return `<div>${label}: $${dollarsPerMillion}/M</div>`;
   };
   const promptEntry = formatEntry("Input Token", priceObject.prompt);
   const completionEntry = formatEntry("Output Token", priceObject.completion);
-  if (!promptEntry && !completionEntry) {
-    return "";
+  if (promptEntry) {
+    entries.push(promptEntry);
   }
-  return `
-    <div class="mt-2 space-y-1 text-[11px] text-text-muted">
-      ${[promptEntry, completionEntry].filter(Boolean).join("")}
-    </div>
-  `;
+  if (completionEntry) {
+    entries.push(completionEntry);
+  }
+  if (entries.length === 0) {
+    return null;
+  }
+  return `<div class="space-y-1 text-[11px] leading-relaxed text-text-muted">${entries.join("")}</div>`;
 };
-
-
 
 type ThreeMesh = InstanceType<typeof THREE.Mesh>;
 type ThreeVector3 = InstanceType<typeof THREE.Vector3>;
@@ -217,11 +218,26 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const focusPrimaryBubble = document.createElement("div");
     focusPrimaryBubble.className =
-      "pointer-events-auto w-60 max-w-xs rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors select-text";
+      "pointer-events-auto inline-block min-w-[18rem] max-w-3xl rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors select-text";
     focusPrimaryBubble.style.position = "absolute";
     focusPrimaryBubble.style.visibility = "hidden";
     focusPrimaryBubble.style.zIndex = "9";
     container.appendChild(focusPrimaryBubble);
+
+    const priceTooltip = document.createElement("div");
+    priceTooltip.className =
+      "pointer-events-none max-w-xs rounded-lg border border-border-default bg-surface-overlay px-3 py-2 text-[11px] text-text-primary shadow-lg shadow-accent transition-opacity";
+    priceTooltip.style.position = "absolute";
+    priceTooltip.style.visibility = "hidden";
+    priceTooltip.style.zIndex = "11";
+    container.appendChild(priceTooltip);
+
+    const hidePriceTooltip = () => {
+      priceTooltip.style.visibility = "hidden";
+      priceTooltip.style.display = "none";
+    };
+
+    hidePriceTooltip();
 
     const leaderSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     leaderSvg.setAttribute("width", `${width}`);
@@ -340,6 +356,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         activeMarker = null;
         focusPrimaryBubble.style.visibility = "hidden";
         leaderSvg.style.visibility = "hidden";
+        hidePriceTooltip();
         return;
       }
       const { model } = marker;
@@ -363,36 +380,84 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
            </div>`
         : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-surface-base text-sm font-semibold text-text-secondary">${providerInitial}</div>`;
       const isOpenSource = model.is_open_source !== false;
-      const licenseLabel = isOpenSource ? "开源" : "闭源";
+      const licenseLabel = isOpenSource ? "\u5f00\u6e90" : "\u95ed\u6e90";
       const licenseClass = isOpenSource
         ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
         : "bg-rose-500/10 text-rose-400 border border-rose-500/30";
-      const priceMarkup = !isOpenSource ? renderPriceMarkup(model.price) : "";
-      const priceFallback =
-        !isOpenSource && !priceMarkup
-          ? `<div class="mt-2 text-[11px] text-text-muted">暂无价格信息</div>`
-          : "";
+      const priceTooltipMarkup =
+        renderPriceTooltip(model.price) ??
+        (!isOpenSource ? '<div class="text-[11px] text-text-muted">暂无价格信息</div>' : null);
+      const descriptionMarkup = description
+        ? `<div class="w-full text-[11px] leading-relaxed text-text-muted break-words whitespace-normal">${description}</div>`
+        : "";
       focusPrimaryBubble.innerHTML = `
-        <div class="flex items-start gap-3">
-          ${avatarMarkup}
-          <div class="min-w-0 flex-1">
-            <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
-            <div class="mt-0.5 text-sm font-medium text-text-secondary break-words">${model.model_name}</div>
-            <div class="mt-2 flex flex-wrap gap-2">
-              <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-medium ${licenseClass}">${licenseLabel}</span>
-              ${
-                !isOpenSource && priceMarkup
-                  ? '<span class="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-medium text-amber-400">价格</span>'
-                  : ""
-              }
+        <div class="inline-flex flex-col items-stretch gap-3">
+          <div class="w-full rounded-lg bg-slate-100 p-3">
+            <div class="flex items-start gap-3">
+              ${avatarMarkup}
+              <div class="min-w-0 flex-1">
+                <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
+                <div class="mt-1 flex items-center gap-2">
+                  <div class="flex-shrink-0 text-[13px] font-medium text-text-secondary whitespace-nowrap">${model.model_name}</div>
+                  <span class="timeline-license-chip inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-medium ${licenseClass}">${licenseLabel}</span>
+                </div>
+              </div>
             </div>
-            <div class="mt-2 text-[11px] text-text-muted">发布时间：${createdAt}</div>
           </div>
+          <div class="text-[11px] text-text-muted">&#x53D1;&#x5E03;&#x65F6;&#x95F4;&#xFF1A;${createdAt}</div>
+          ${descriptionMarkup}
         </div>
-        ${description ? `<div class="mt-2 text-[11px] leading-relaxed text-text-secondary">${description}</div>` : ""}
-        ${priceMarkup || priceFallback}
       `;
       focusPrimaryBubble.style.visibility = "visible";
+
+      const licenseChip = focusPrimaryBubble.querySelector<HTMLSpanElement>(".timeline-license-chip");
+      hidePriceTooltip();
+      if (licenseChip) {
+        licenseChip.onpointerenter = null;
+        licenseChip.onpointerleave = null;
+        licenseChip.onpointermove = null;
+        if (priceTooltipMarkup) {
+          licenseChip.style.cursor = "help";
+          const showTooltip = () => {
+            priceTooltip.innerHTML = priceTooltipMarkup;
+            priceTooltip.style.display = "block";
+            priceTooltip.style.visibility = "hidden";
+            const containerRect = container.getBoundingClientRect();
+            const chipRect = licenseChip.getBoundingClientRect();
+            const tooltipRect = priceTooltip.getBoundingClientRect();
+            const horizontalPadding = 8;
+            const verticalOffset = 10;
+            let left =
+              chipRect.left -
+              containerRect.left +
+              chipRect.width / 2 -
+              tooltipRect.width / 2;
+            left = THREE.MathUtils.clamp(
+              left,
+              horizontalPadding,
+              containerRect.width - tooltipRect.width - horizontalPadding,
+            );
+            let top = chipRect.top - containerRect.top - tooltipRect.height - verticalOffset;
+            if (top < horizontalPadding) {
+              top = chipRect.top - containerRect.top + chipRect.height + verticalOffset;
+            }
+            priceTooltip.style.left = `${left}px`;
+            priceTooltip.style.top = `${top}px`;
+            priceTooltip.style.visibility = "visible";
+          };
+          const handlePointerEnter = () => {
+            showTooltip();
+          };
+          const handlePointerLeave = () => {
+            hidePriceTooltip();
+          };
+          licenseChip.onpointerenter = handlePointerEnter;
+          licenseChip.onpointerleave = handlePointerLeave;
+          licenseChip.onpointermove = handlePointerEnter;
+        } else {
+          licenseChip.style.removeProperty("cursor");
+        }
+      }
 
       activeMarker = marker;
     };
@@ -655,6 +720,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
         if (projected.z < -1 || projected.z > 1) {
           focusPrimaryBubble.style.visibility = "hidden";
           leaderSvg.style.visibility = "hidden";
+          hidePriceTooltip();
         } else {
           const screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
           const screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
@@ -695,6 +761,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       } else {
         focusPrimaryBubble.style.visibility = "hidden";
         leaderSvg.style.visibility = "hidden";
+        hidePriceTooltip();
       }
 
       renderer.render(scene, camera);
@@ -712,6 +779,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       renderer.domElement.removeEventListener("wheel", handleWheel);
       tooltip.remove();
       focusPrimaryBubble.remove();
+      priceTooltip.remove();
       leaderSvg.remove();
       controls.dispose();
       tubeGeometry.dispose();
