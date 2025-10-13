@@ -128,13 +128,22 @@ const Home = () => {
             modelQuery={timelineSearchInput}
             onModelQueryChange={setTimelineSearchInput}
             onModelQuerySubmit={() => {
-              setTimelineSearchFilter(timelineSearchInput.trim());
+              const trimmed = timelineSearchInput.trim();
+              setTimelineSearchFilter(trimmed);
               setTimelinePage(1);
+              if (trimmed.length > 0) {
+                setTimelineRange("all");
+                setTimelineYear(null);
+              }
             }}
             onModelQueryClear={() => {
               setTimelineSearchFilter("");
               setTimelineSearchInput("");
               setTimelinePage(1);
+              if (timelineRange === "all") {
+                setTimelineRange("30d");
+                setTimelineYear(null);
+              }
             }}
             onPresetChange={(range) => {
               setTimelineRange(range);

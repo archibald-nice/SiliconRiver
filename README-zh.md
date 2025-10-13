@@ -110,7 +110,12 @@ SiliconRiver/
    ```
 5. **运行抓取器**（可重复执行以刷新数据）
    ```bash
+   ## 首次全量
    python src/scraper/fetch_models.py
+   python src/scraper/fetch_models_openrouter.py
+   ## 每日增量
+   python -m src.scraper.fetch_models_incr_day
+   python -m src.scraper.fetch_models_openrouter_incr_day
    ```
 6. **启动 API**
    ```bash
