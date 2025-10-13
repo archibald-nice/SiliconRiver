@@ -189,7 +189,7 @@ async def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
 
 @app.get("/api/timeline", response_model=TimelineResponse)
 async def timeline_models(
-    preset: str = Query("30d", regex="^(30d|6m|1y)"),
+    preset: str = Query("30d", regex="^(30d|6m|1y|all)"),
     year: Optional[int] = Query(None, ge=1900, le=3000),
     page: int = Query(1, ge=1),
     page_size: int = Query(200, ge=10, le=500),
@@ -204,8 +204,14 @@ async def timeline_models(
     end = end_dt.isoformat()
     order_clause = "ASC" if sort == "asc" else "DESC"
     offset = (page - 1) * page_size
-    filters: List[str] = ["m.created_at BETWEEN %s AND %s"]
-    params: List[object] = [start, end]
+    filters: List[str] = []
+    params: List[object] = []
+
+    if year is None and preset == "all":
+        filters.append("1=1")
+    else:
+        filters.append("m.created_at BETWEEN %s AND %s")
+        params.extend([start, end])
 
     if provider:
         filters.append("m.provider = %s")
@@ -377,6 +383,10 @@ def _calculate_timeline_window(preset: str, year: Optional[int]) -> tuple[dateti
         return start_dt, end_dt, f"{year}年"
 
     preset = preset or "30d"
+    if preset == "all":
+        start_dt = datetime(1970, 1, 1)
+        end_dt = now
+        return start_dt, end_dt, "全部"
     if preset == "6m":
         start_dt = now - timedelta(days=182)
         label = "近半年"

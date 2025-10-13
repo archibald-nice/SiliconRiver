@@ -1,6 +1,6 @@
 import { FormEvent, KeyboardEvent, useId } from "react";
 
-export type TimelinePresetRange = "30d" | "6m" | "1y";
+export type TimelinePresetRange = "all" | "30d" | "6m" | "1y";
 
 type TimelineFiltersProps = {
   activeRange: TimelinePresetRange;
@@ -19,6 +19,7 @@ type TimelineFiltersProps = {
 };
 
 const PRESET_OPTIONS: { label: string; value: TimelinePresetRange; description: string }[] = [
+  { label: "不限", value: "all", description: "显示所有时间范围的模型" },
   { label: "近30天", value: "30d", description: "呈现最近30天新增的模型" },
   { label: "近6个月", value: "6m", description: "呈现最近6个月新增的模型" },
   { label: "今年", value: "1y", description: "呈现今年发布的模型" },
@@ -108,7 +109,7 @@ const TimelineFilters = ({
         >
           确定
         </button>
-        {customYear && (
+        {customYear ? (
           <button
             type="button"
             onClick={() => onCustomYearChange(null)}
@@ -116,7 +117,7 @@ const TimelineFilters = ({
           >
             清除年份
           </button>
-        )}
+        ) : null}
       </form>
 
       {providers.length > 0 ? (
