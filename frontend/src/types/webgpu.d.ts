@@ -1,5 +1,5 @@
 declare global {
-  type GPUTexture = unknown;
+  class GPUTexture {}
 }
 
 export {};

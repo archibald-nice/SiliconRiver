@@ -1,36 +1,22 @@
 
 import * as THREE from "three";
 import { useEffect, useRef } from "react";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { TimelineModel } from "../api/client";
 import { buildProviderAvatarUrl } from "../api/client";
+import { COLOR_ACTIVE, COLOR_BASE, COLOR_LINE, getDefaultCameraPosition, getDefaultFocusAnchor } from "../timeline/core/constants";
+import { buildTimelineDataset } from "../timeline/core/dataset";
+import { TimelineEventNode } from "../timeline/core/event-node";
+import { TimelineScene } from "../timeline/core/scene";
 
 type Timeline3DProps = {
   models: TimelineModel[];
 };
 
 const CANVAS_HEIGHT = 520;
-const focusAnchor = new THREE.Vector3(6, -3, -8);
+const focusAnchor = getDefaultFocusAnchor();
+const defaultCameraPosition = getDefaultCameraPosition();
 const WHEEL_STEP = 1;
-
-const CAMERA_POSITION = new THREE.Vector3(-34, 26, 30);
-const CAMERA_LOOK_TARGET = focusAnchor.clone();
-
-const COLOR_BASE = 0xfacc15;
-const COLOR_ACTIVE = 0xfb923c;
-const COLOR_LINE = 0x1e293b;
-
-const BASE_START_ANGLE = -Math.PI * 1.25;
-const BASE_END_ANGLE = Math.PI * 1.4;
-const BASE_START_RADIUS = 26;
-const BASE_END_RADIUS = 6;
-const BASE_START_HEIGHT = -16;
-const BASE_END_HEIGHT = 14;
-const BASE_DEPTH_SHIFT = -28;
-const BASE_WAVE_AMPLITUDE = 4.2;
-const COUNT_LOWER_BOUND = 12;
-const COUNT_UPPER_BOUND = 220;
 
 const normalisePriceObject = (price: unknown): Record<string, unknown> | null => {
   if (!price) {
@@ -83,8 +69,6 @@ const renderPriceTooltip = (price: unknown): string | null => {
 
 type ThreeMesh = InstanceType<typeof THREE.Mesh>;
 type ThreeVector3 = InstanceType<typeof THREE.Vector3>;
-type ThreeMeshStandardMaterial = InstanceType<typeof THREE.MeshStandardMaterial>;
-type ThreeColor = InstanceType<typeof THREE.Color>;
 
 const toTwoDigits = (value: number) => String(value).padStart(2, "0");
 
@@ -136,60 +120,6 @@ const createLabelSprite = (text: string) => {
   return sprite;
 };
 
-const remapSampleCount = (count: number) => {
-  if (count <= COUNT_LOWER_BOUND) {
-    return 0;
-  }
-  if (count >= COUNT_UPPER_BOUND) {
-    return 1;
-  }
-  return (count - COUNT_LOWER_BOUND) / (COUNT_UPPER_BOUND - COUNT_LOWER_BOUND);
-};
-
-const buildTimelineCurve = (sampleCount: number) => {
-  const safeCount = Math.max(sampleCount, 1);
-  const density = remapSampleCount(safeCount);
-  const lengthMultiplier = THREE.MathUtils.lerp(0.72, 2.08, density);
-  const angleCenter = (BASE_START_ANGLE + BASE_END_ANGLE) / 2;
-  const baseSpan = BASE_END_ANGLE - BASE_START_ANGLE;
-  const angleSpan = baseSpan * lengthMultiplier;
-  const startAngle = angleCenter - angleSpan / 2;
-  const endAngle = angleCenter + angleSpan / 2;
-
-  const radiusScale = THREE.MathUtils.lerp(0.78, 1.18, density);
-  const startRadius = BASE_START_RADIUS * radiusScale;
-  const endRadius = BASE_END_RADIUS * THREE.MathUtils.lerp(0.9, 1.08, density);
-
-  const heightScale = THREE.MathUtils.lerp(0.84, 1.36, density);
-  const startHeight = BASE_START_HEIGHT * heightScale;
-  const endHeight = BASE_END_HEIGHT * heightScale;
-
-  const depthScale = THREE.MathUtils.lerp(0.72, 1.5, density);
-  const depthShift = BASE_DEPTH_SHIFT * depthScale;
-
-  const waveAmplitude = BASE_WAVE_AMPLITUDE * THREE.MathUtils.lerp(0.7, 1.28, density);
-
-  const segments = Math.max(Math.round(safeCount * THREE.MathUtils.lerp(2, 4.2, density)), 48);
-  const points: ThreeVector3[] = [];
-
-  for (let index = 0; index < segments; index += 1) {
-    const t = segments > 1 ? index / (segments - 1) : 0;
-    const easedRadius = THREE.MathUtils.lerp(startRadius, endRadius, Math.pow(t, 0.88));
-    const angle = THREE.MathUtils.lerp(startAngle, endAngle, t);
-    const baseHeight = THREE.MathUtils.lerp(startHeight, endHeight, t);
-    const wave = Math.sin(t * Math.PI * 1.15) * waveAmplitude * (1 - t * 0.4);
-    const x = Math.cos(angle) * easedRadius;
-    const z = Math.sin(angle) * easedRadius + depthShift * (1 - t * 0.7);
-    const y = baseHeight + wave;
-    points.push(new THREE.Vector3(x, y, z));
-  }
-
-  const endPoint = points[points.length - 1]?.clone() ?? new THREE.Vector3();
-  points.forEach((point) => point.sub(endPoint));
-  points.forEach((point) => point.add(focusAnchor));
-
-  return new THREE.CatmullRomCurve3(points, false, "catmullrom", 0.6);
-};
 
 const Timeline3D = ({ models }: Timeline3DProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -288,43 +218,23 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     leaderSvg.appendChild(primaryLeader);
 
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xffffff);
+    const timelineScene = new TimelineScene({
+      container,
+      size: { width, height },
+      background: 0xffffff,
+      camera: {
+        position: defaultCameraPosition.clone(),
+        target: focusAnchor.clone(),
+      },
+    });
+    const { scene, camera, renderer, controls } = timelineScene;
 
-    const camera = new THREE.PerspectiveCamera(48, width / height, 0.1, 1000);
-    camera.position.copy(CAMERA_POSITION);
-    camera.lookAt(CAMERA_LOOK_TARGET);
+    const dataset = buildTimelineDataset(models);
+    const sorted = dataset.models;
+    const minTime = dataset.minTime;
+    const span = dataset.span;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    container.appendChild(renderer.domElement);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enablePan = false;
-    controls.enableZoom = false;
-    controls.enableRotate = true;
-    controls.minPolarAngle = THREE.MathUtils.degToRad(32);
-    controls.maxPolarAngle = THREE.MathUtils.degToRad(58);
-    controls.minAzimuthAngle = THREE.MathUtils.degToRad(-28);
-    controls.maxAzimuthAngle = THREE.MathUtils.degToRad(6);
-    controls.target.copy(CAMERA_LOOK_TARGET);
-    controls.update();
-
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
-    directionalLight.position.set(10, 20, 30);
-    scene.add(ambientLight, directionalLight);
-
-    const sorted = [...models].sort(
-      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
-    const times = sorted.map((item) => new Date(item.created_at).getTime());
-    const minTime = Math.min(...times);
-    const maxTime = Math.max(...times);
-    const span = Math.max(maxTime - minTime, 1);
-
-    const baseCurve = buildTimelineCurve(sorted.length);
+    const baseCurve = dataset.curve;
     const tubeGeometry = new THREE.TubeGeometry(baseCurve, 420, 0.28, 16, false);
     const tubeMaterial = new THREE.MeshStandardMaterial({ color: COLOR_LINE, emissive: 0x0f172a });
     const tubeMesh = new THREE.Mesh(tubeGeometry, tubeMaterial);
@@ -334,51 +244,22 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     scene.add(timelineGroup);
 
     const markerGeometry = new THREE.SphereGeometry(0.7, 18, 18);
-    type MarkerEntry = {
-      mesh: ThreeMesh;
-      basePosition: ThreeVector3;
-      model: TimelineModel;
-      material: ThreeMeshStandardMaterial;
-      currentScale: number;
-      targetScale: number;
-      currentOpacity: number;
-      targetOpacity: number;
-      targetColor: ThreeColor;
-    };
-    const markers: MarkerEntry[] = [];
+    const markers: TimelineEventNode[] = [];
 
     sorted.forEach((model) => {
       const created = new Date(model.created_at).getTime();
       const t = (created - minTime) / span;
       const basePosition = baseCurve.getPointAt(t);
-      const material = new THREE.MeshStandardMaterial({
-        color: COLOR_BASE,
-        emissive: 0x312e81,
-        transparent: true,
-        opacity: 1,
-      });
-      const mesh = new THREE.Mesh(markerGeometry.clone(), material);
-      mesh.position.copy(basePosition);
-      mesh.userData = { model };
-      timelineGroup.add(mesh);
-      markers.push({
-        mesh,
-        basePosition,
-        model,
-        material,
-        currentScale: 1,
-        targetScale: 1,
-        currentOpacity: 1,
-        targetOpacity: 1,
-        targetColor: new THREE.Color(COLOR_BASE),
-      });
-      mesh.userData.markerIndex = markers.length - 1;
+      const node = new TimelineEventNode(model, basePosition, { geometry: markerGeometry });
+      node.attachTo(timelineGroup);
+      markers.push(node);
+      node.setMarkerIndex(markers.length - 1);
     });
 
     const focusPosition = new THREE.Vector3();
-    let activeMarker: MarkerEntry | null = null;
-    let previousMarker: MarkerEntry | null = null;
-    let nextMarker: MarkerEntry | null = null;
+    let activeMarker: TimelineEventNode | null = null;
+    let previousMarker: TimelineEventNode | null = null;
+    let nextMarker: TimelineEventNode | null = null;
     let lastFocusDirection = 0;
 
     const escapeAttribute = (value: string) =>
@@ -433,7 +314,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       });
     };
 
-    const renderFocusBubbles = (marker: MarkerEntry | null) => {
+    const renderFocusBubbles = (marker: TimelineEventNode | null) => {
       if (!marker) {
         activeMarker = null;
         focusPrimaryBubble.style.visibility = "hidden";
@@ -593,7 +474,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     let sumZ = 0;
     let minY = Number.POSITIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
-    curveSamples.forEach((sample) => {
+    curveSamples.forEach((sample: ThreeVector3) => {
       sumX += sample.x;
       sumZ += sample.z;
       if (sample.y < minY) {
@@ -665,8 +546,8 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
     let targetTimelineOffset = timelineGroup.position.clone();
     const activeColor = new THREE.Color(COLOR_ACTIVE);
     const baseColor = new THREE.Color(COLOR_BASE);
-    const cameraFocus = CAMERA_LOOK_TARGET.clone();
-    let targetCameraFocus = CAMERA_LOOK_TARGET.clone();
+    const cameraFocus = focusAnchor.clone();
+    let targetCameraFocus = focusAnchor.clone();
 
     const focusMarkerAt = (index: number) => {
       if (!markers.length) {
@@ -709,22 +590,24 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
       markers.forEach((entry, index) => {
         if (index === highlightIndex) {
-          entry.targetScale = 1.6;
-          entry.targetOpacity = 1;
-          entry.targetColor = activeColor.clone();
+          entry.setTargetState({ scale: 1.6, opacity: 1, color: activeColor });
           return;
         }
 
         const distance = index - highlightIndex;
         if (distance < 0) {
           const backward = Math.abs(distance);
-          entry.targetScale = backward === 1 ? 0.95 : backward === 2 ? 0.8 : 0.7;
-          entry.targetOpacity = backward === 1 ? 0.55 : backward === 2 ? 0.4 : 0.3;
-          entry.targetColor = baseColor.clone();
+          entry.setTargetState({
+            scale: backward === 1 ? 0.95 : backward === 2 ? 0.8 : 0.7,
+            opacity: backward === 1 ? 0.55 : backward === 2 ? 0.4 : 0.3,
+            color: baseColor,
+          });
         } else {
-          entry.targetScale = distance === 1 ? 1.15 : distance === 2 ? 1.05 : 1.0;
-          entry.targetOpacity = distance === 1 ? 0.8 : distance === 2 ? 0.6 : 0.45;
-          entry.targetColor = baseColor.clone();
+          entry.setTargetState({
+            scale: distance === 1 ? 1.15 : distance === 2 ? 1.05 : 1.0,
+            opacity: distance === 1 ? 0.8 : distance === 2 ? 0.6 : 0.45,
+            color: baseColor,
+          });
         }
       });
     };
@@ -815,9 +698,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
 
     const handleResize = () => {
       const newWidth = container.clientWidth;
-      camera.aspect = newWidth / height;
-      camera.updateProjectionMatrix();
-      renderer.setSize(newWidth, height);
+      timelineScene.resize(newWidth, height);
       leaderSvg.setAttribute("width", `${newWidth}`);
       leaderSvg.setAttribute("height", `${height}`);
       leaderSvg.setAttribute("viewBox", `0 0 ${newWidth} ${height}`);
@@ -834,12 +715,7 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       controls.update();
 
       markers.forEach((entry) => {
-        entry.currentScale = THREE.MathUtils.lerp(entry.currentScale, entry.targetScale, 0.2);
-        entry.mesh.scale.setScalar(entry.currentScale);
-
-        entry.currentOpacity = THREE.MathUtils.lerp(entry.currentOpacity, entry.targetOpacity, 0.18);
-        entry.material.opacity = entry.currentOpacity;
-        entry.material.color.lerp(entry.targetColor, 0.2);
+        entry.updateTransition();
       });
 
       const viewportWidth = renderer.domElement.clientWidth;
@@ -995,21 +871,18 @@ const Timeline3D = ({ models }: Timeline3DProps) => {
       prevHintLabel.remove();
       priceTooltip.remove();
       leaderSvg.remove();
-      controls.dispose();
       tubeGeometry.dispose();
       tubeMaterial.dispose();
-      markerGeometry.dispose();
-      markers.forEach(({ mesh, material }) => {
-        material.dispose();
-        timelineGroup.remove(mesh);
+      markers.forEach((entry) => {
+        entry.dispose(timelineGroup);
       });
+      markerGeometry.dispose();
       arrowGeometry.dispose();
       arrowMaterial.dispose();
       axisMaterial.dispose();
       axisGroup.clear();
       scene.remove(timelineGroup);
-      renderer.dispose();
-      renderer.domElement.remove();
+      timelineScene.dispose();
     };
   }, [models]);
 
