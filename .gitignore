@@ -27,4 +27,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Claude Code settings (local machine specific)
+.claude/
+
 /docs
