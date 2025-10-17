@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { buildProviderAvatarUrl, fetchStats, fetchTimeline, type ProviderStat, type TimelineResponse } from "../api/client";
 import Timeline3D from "../components/Timeline3D";
 import TimelineFilters, { TimelinePresetRange } from "../components/TimelineFilters";
+import { ModeSwitcher, ModeInfoCard, type TimelineModeName } from "../components/ModeSwitcher";
 
 const TIMELINE_PAGE_SIZE = 200;
 const prefetchedAvatars = new Set<string>();
@@ -16,6 +17,7 @@ const Home = () => {
   const [timelineSearchInput, setTimelineSearchInput] = useState("");
   const [timelineSearchFilter, setTimelineSearchFilter] = useState("");
   const [timelineOpenSource, setTimelineOpenSource] = useState<"all" | "open" | "closed">("all");
+  const [timelineMode, setTimelineMode] = useState<TimelineModeName>("classic");
 
   const { data: providerStats } = useQuery<ProviderStat[]>({
     queryKey: ["provider-stats"],
@@ -93,8 +95,17 @@ const Home = () => {
       <section className="flex flex-col gap-6">
         <div className="rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors">
           <header className="border-b border-border-default px-6 py-4">
-            <h1 className="text-xl font-semibold text-text-primary">Timeline</h1>
-            <p className="mt-1 text-sm text-text-muted">滚动或调整右侧筛选器，浏览最新模型节点。</p>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h1 className="text-xl font-semibold text-text-primary">Timeline</h1>
+                <p className="mt-1 text-sm text-text-muted">滚动或调整右侧筛选器，浏览最新模型节点。</p>
+              </div>
+              <ModeSwitcher
+                currentMode={timelineMode}
+                onModeChange={setTimelineMode}
+                disabled={isTimelineLoading || timelineItems.length === 0}
+              />
+            </div>
           </header>
           <div className="p-6">
             {isTimelineLoading ? (
@@ -103,7 +114,7 @@ const Home = () => {
               <p className="text-center text-sm text-text-muted">No models available in this range.</p>
             ) : (
               <div className="w-full xl:px-2">
-                <Timeline3D models={timelineItems} />
+                <Timeline3D models={timelineItems} mode={timelineMode} />
               </div>
             )}
           </div>
@@ -111,6 +122,9 @@ const Home = () => {
       </section>
 
       <aside className="flex flex-col gap-4">
+        {/* 模式信息卡片 */}
+        <ModeInfoCard mode={timelineMode} />
+
         <section className="rounded-2xl border border-border-default bg-surface-raised p-5 shadow-lg shadow-accent transition-colors">
           <header className="mb-4 space-y-1">
             <h2 className="text-sm font-semibold text-text-primary">{"\u6a21\u578b\u68c0\u7d22"}</h2>
