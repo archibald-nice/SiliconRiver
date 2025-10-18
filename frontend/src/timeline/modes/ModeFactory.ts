@@ -1,6 +1,7 @@
 import type { ITimelineMode, IModeFactory } from "./ITimelineMode";
 import { ClassicMode } from "./ClassicMode";
 import { RiverCruiseMode } from "./RiverCruiseMode";
+import { HelixConstellationMode } from "./HelixConstellationMode";
 
 /**
  * Timeline 模式工厂
@@ -21,11 +22,10 @@ export class TimelineModeFactory implements IModeFactory {
       case "river":
         return new RiverCruiseMode();
 
+      case "helix":
+        return new HelixConstellationMode();
+
       // 预留未来模式
-      // case "canyon":
-      //   return new CanyonWalkMode();
-      // case "helix":
-      //   return new HelixConstellationMode();
       // case "sandbox":
       //   return new SandboxExplorerMode();
 
@@ -42,9 +42,8 @@ export class TimelineModeFactory implements IModeFactory {
     return [
       "classic",
       "river",
+      "helix",
       // 未来模式（当前被注释）
-      // "canyon",
-      // "helix",
       // "sandbox",
     ];
   }

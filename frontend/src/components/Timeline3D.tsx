@@ -576,126 +576,128 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           const viewportHeight = renderer.domElement.clientHeight;
 
           if (activeMarker) {
-            const timelineGroup = modeInstance.getScene().children.find(
-              (child: InstanceType<typeof THREE.Object3D>) => child.type === "Group"
-            ) as InstanceType<typeof THREE.Group> | undefined;
+            // 获取节点的世界坐标位置
+            activeMarker.mesh.getWorldPosition(focusPosition);
+            const projected = focusPosition.clone().project(camera);
 
-            if (timelineGroup) {
-              focusPosition.copy(activeMarker.basePosition).add(timelineGroup.position);
-              const projected = focusPosition.clone().project(camera);
+            // 调试日志（偶尔打印避免刷屏）
+            if (Math.random() < 0.01) {
+              const screenX_debug = (projected.x * 0.5 + 0.5) * viewportWidth;
+              const screenY_debug = (-projected.y * 0.5 + 0.5) * viewportHeight;
+              console.log(`[Bubble] Viewport: ${viewportWidth}x${viewportHeight}, World: (${focusPosition.x.toFixed(2)}, ${focusPosition.y.toFixed(2)}, ${focusPosition.z.toFixed(2)}), Projected NDC: (${projected.x.toFixed(3)}, ${projected.y.toFixed(3)}, ${projected.z.toFixed(3)}), Screen: (${screenX_debug.toFixed(0)}, ${screenY_debug.toFixed(0)})`);
+            }
 
-              if (projected.z < -1 || projected.z > 1) {
-                focusPrimaryBubble.style.visibility = "hidden";
-                leaderSvg.style.visibility = "hidden";
-                hidePriceTooltip();
-                focusPrevBubble.style.visibility = "hidden";
-                focusNextBubble.style.visibility = "hidden";
-                nextHintLabel.style.visibility = "hidden";
-                prevHintLabel.style.visibility = "hidden";
+            if (projected.z < -1 || projected.z > 1) {
+              focusPrimaryBubble.style.visibility = "hidden";
+              leaderSvg.style.visibility = "hidden";
+              hidePriceTooltip();
+              focusPrevBubble.style.visibility = "hidden";
+              focusNextBubble.style.visibility = "hidden";
+              nextHintLabel.style.visibility = "hidden";
+              prevHintLabel.style.visibility = "hidden";
+            } else {
+              const screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
+              const screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
+
+              const padding = 12;
+              const primaryOffsets = { x: 78, y: -170 };
+
+              const positionBubble = (bubble: HTMLDivElement, offsetX: number, offsetY: number) => {
+                const widthPx = bubble.offsetWidth || 0;
+                const heightPx = bubble.offsetHeight || 0;
+                let left = screenX + offsetX;
+                let top = screenY + offsetY;
+                left = THREE.MathUtils.clamp(left, padding, viewportWidth - widthPx - padding);
+                top = THREE.MathUtils.clamp(top, padding, viewportHeight - heightPx - padding);
+                bubble.style.left = `${left}px`;
+                bubble.style.top = `${top}px`;
+                return { left, top, width: widthPx, height: heightPx };
+              };
+
+              const primaryRect = positionBubble(focusPrimaryBubble, primaryOffsets.x, primaryOffsets.y);
+              focusPrimaryBubble.style.visibility = "visible";
+
+              // 更新引导线
+              leaderSvg.style.visibility = "visible";
+              leaderSvg.setAttribute("width", `${viewportWidth}`);
+              leaderSvg.setAttribute("height", `${viewportHeight}`);
+              leaderSvg.setAttribute("viewBox", `0 0 ${viewportWidth} ${viewportHeight}`);
+
+              const primaryAnchorX = primaryRect.left;
+              const primaryAnchorY = primaryRect.top + primaryRect.height / 2;
+              primaryLeader.setAttribute("x1", `${screenX}`);
+              primaryLeader.setAttribute("y1", `${screenY}`);
+              primaryLeader.setAttribute("x2", `${primaryAnchorX}`);
+              primaryLeader.setAttribute("y2", `${primaryAnchorY}`);
+
+              const primaryRight = Math.min(primaryRect.left + primaryRect.width, viewportWidth - padding);
+
+              // 定位上一个气泡
+              if (previousMarker) {
+                const prevWidth = focusPrevBubble.offsetWidth || 0;
+                const prevHeight = focusPrevBubble.offsetHeight || 0;
+                let prevLeft = primaryRight - prevWidth;
+                prevLeft = Math.max(padding, prevLeft);
+                const prevRight = prevLeft + prevWidth;
+                if (prevRight > viewportWidth - padding) {
+                  prevLeft = viewportWidth - padding - prevWidth;
+                }
+                let prevTop = primaryRect.top - prevHeight - 12;
+                if (prevTop < padding) prevTop = padding;
+                if (prevTop + prevHeight > viewportHeight - padding) {
+                  prevTop = viewportHeight - prevHeight - padding;
+                }
+                focusPrevBubble.style.left = `${prevLeft}px`;
+                focusPrevBubble.style.top = `${prevTop}px`;
+                focusPrevBubble.style.visibility = "visible";
+
+                const hintWidth = nextHintLabel.offsetWidth || 0;
+                const hintHeight = nextHintLabel.offsetHeight || 0;
+                let hintLeft = primaryRight - hintWidth;
+                hintLeft = Math.max(padding, Math.min(hintLeft, viewportWidth - padding - hintWidth));
+                let hintTop = prevTop - hintHeight - 6;
+                if (hintTop < padding) hintTop = padding;
+                nextHintLabel.style.left = `${hintLeft}px`;
+                nextHintLabel.style.top = `${hintTop}px`;
+                nextHintLabel.style.visibility = "visible";
               } else {
-                const screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
-                const screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
+                focusPrevBubble.style.visibility = "hidden";
+                nextHintLabel.style.visibility = "hidden";
+              }
 
-                const padding = 12;
-                const primaryOffsets = { x: 78, y: -170 };
-
-                const positionBubble = (bubble: HTMLDivElement, offsetX: number, offsetY: number) => {
-                  const widthPx = bubble.offsetWidth || 0;
-                  const heightPx = bubble.offsetHeight || 0;
-                  let left = screenX + offsetX;
-                  let top = screenY + offsetY;
-                  left = THREE.MathUtils.clamp(left, padding, viewportWidth - widthPx - padding);
-                  top = THREE.MathUtils.clamp(top, padding, viewportHeight - heightPx - padding);
-                  bubble.style.left = `${left}px`;
-                  bubble.style.top = `${top}px`;
-                  return { left, top, width: widthPx, height: heightPx };
-                };
-
-                const primaryRect = positionBubble(focusPrimaryBubble, primaryOffsets.x, primaryOffsets.y);
-                focusPrimaryBubble.style.visibility = "visible";
-
-                // 更新引导线
-                leaderSvg.style.visibility = "visible";
-                leaderSvg.setAttribute("width", `${viewportWidth}`);
-                leaderSvg.setAttribute("height", `${viewportHeight}`);
-                leaderSvg.setAttribute("viewBox", `0 0 ${viewportWidth} ${viewportHeight}`);
-
-                const primaryAnchorX = primaryRect.left;
-                const primaryAnchorY = primaryRect.top + primaryRect.height / 2;
-                primaryLeader.setAttribute("x1", `${screenX}`);
-                primaryLeader.setAttribute("y1", `${screenY}`);
-                primaryLeader.setAttribute("x2", `${primaryAnchorX}`);
-                primaryLeader.setAttribute("y2", `${primaryAnchorY}`);
-
-                const primaryRight = Math.min(primaryRect.left + primaryRect.width, viewportWidth - padding);
-
-                // 定位上一个气泡
-                if (previousMarker) {
-                  const prevWidth = focusPrevBubble.offsetWidth || 0;
-                  const prevHeight = focusPrevBubble.offsetHeight || 0;
-                  let prevLeft = primaryRight - prevWidth;
-                  prevLeft = Math.max(padding, prevLeft);
-                  const prevRight = prevLeft + prevWidth;
-                  if (prevRight > viewportWidth - padding) {
-                    prevLeft = viewportWidth - padding - prevWidth;
-                  }
-                  let prevTop = primaryRect.top - prevHeight - 12;
-                  if (prevTop < padding) prevTop = padding;
-                  if (prevTop + prevHeight > viewportHeight - padding) {
-                    prevTop = viewportHeight - prevHeight - padding;
-                  }
-                  focusPrevBubble.style.left = `${prevLeft}px`;
-                  focusPrevBubble.style.top = `${prevTop}px`;
-                  focusPrevBubble.style.visibility = "visible";
-
-                  const hintWidth = nextHintLabel.offsetWidth || 0;
-                  const hintHeight = nextHintLabel.offsetHeight || 0;
-                  let hintLeft = primaryRight - hintWidth;
-                  hintLeft = Math.max(padding, Math.min(hintLeft, viewportWidth - padding - hintWidth));
-                  let hintTop = prevTop - hintHeight - 6;
-                  if (hintTop < padding) hintTop = padding;
-                  nextHintLabel.style.left = `${hintLeft}px`;
-                  nextHintLabel.style.top = `${hintTop}px`;
-                  nextHintLabel.style.visibility = "visible";
-                } else {
-                  focusPrevBubble.style.visibility = "hidden";
-                  nextHintLabel.style.visibility = "hidden";
+              // 定位下一个气泡
+              if (nextMarker) {
+                const nextWidth = focusNextBubble.offsetWidth || 0;
+                const nextHeight = focusNextBubble.offsetHeight || 0;
+                let nextLeft = primaryRight - nextWidth;
+                nextLeft = Math.max(padding, nextLeft);
+                const nextRight = nextLeft + nextWidth;
+                if (nextRight > viewportWidth - padding) {
+                  nextLeft = viewportWidth - padding - nextWidth;
                 }
-
-                // 定位下一个气泡
-                if (nextMarker) {
-                  const nextWidth = focusNextBubble.offsetWidth || 0;
-                  const nextHeight = focusNextBubble.offsetHeight || 0;
-                  let nextLeft = primaryRight - nextWidth;
-                  nextLeft = Math.max(padding, nextLeft);
-                  const nextRight = nextLeft + nextWidth;
-                  if (nextRight > viewportWidth - padding) {
-                    nextLeft = viewportWidth - padding - nextWidth;
-                  }
-                  let nextTop = primaryRect.top + primaryRect.height + 12;
-                  if (nextTop + nextHeight > viewportHeight - padding) {
-                    nextTop = viewportHeight - nextHeight - padding;
-                  }
-                  if (nextTop < padding) nextTop = padding;
-                  focusNextBubble.style.left = `${nextLeft}px`;
-                  focusNextBubble.style.top = `${nextTop}px`;
-                  focusNextBubble.style.visibility = "visible";
-
-                  const hintWidth = prevHintLabel.offsetWidth || 0;
-                  const hintHeight = prevHintLabel.offsetHeight || 0;
-                  let hintLeft = primaryRight - hintWidth;
-                  hintLeft = Math.max(padding, Math.min(hintLeft, viewportWidth - padding - hintWidth));
-                  let hintTop = nextTop + nextHeight + 4;
-                  if (hintTop + hintHeight > viewportHeight - padding) {
-                    hintTop = viewportHeight - padding - hintHeight;
-                  }
-                  prevHintLabel.style.left = `${hintLeft}px`;
-                  prevHintLabel.style.top = `${hintTop}px`;
-                  prevHintLabel.style.visibility = "visible";
-                } else {
-                  focusNextBubble.style.visibility = "hidden";
-                  prevHintLabel.style.visibility = "hidden";
+                let nextTop = primaryRect.top + primaryRect.height + 12;
+                if (nextTop + nextHeight > viewportHeight - padding) {
+                  nextTop = viewportHeight - nextHeight - padding;
                 }
+                if (nextTop < padding) nextTop = padding;
+                focusNextBubble.style.left = `${nextLeft}px`;
+                focusNextBubble.style.top = `${nextTop}px`;
+                focusNextBubble.style.visibility = "visible";
+
+                const hintWidth = prevHintLabel.offsetWidth || 0;
+                const hintHeight = prevHintLabel.offsetHeight || 0;
+                let hintLeft = primaryRight - hintWidth;
+                hintLeft = Math.max(padding, Math.min(hintLeft, viewportWidth - padding - hintWidth));
+                let hintTop = nextTop + nextHeight + 4;
+                if (hintTop + hintHeight > viewportHeight - padding) {
+                  hintTop = viewportHeight - padding - hintHeight;
+                }
+                prevHintLabel.style.left = `${hintLeft}px`;
+                prevHintLabel.style.top = `${hintTop}px`;
+                prevHintLabel.style.visibility = "visible";
+              } else {
+                focusNextBubble.style.visibility = "hidden";
+                prevHintLabel.style.visibility = "hidden";
               }
             }
           } else {
