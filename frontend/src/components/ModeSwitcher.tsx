@@ -121,8 +121,8 @@ export const ModeInfoCard = ({ mode }: ModeInfoCardProps) => {
     },
     helix: {
       description: "星轨螺旋模式，模型沿螺旋轨道排列如繁星",
-      features: ["12圈螺旋结构", "粒子尾迹", "极坐标小地图", "发光效果"],
-      controls: ["滚轮: 上升/下降", "点击节点: 聚焦", "拖拽: 环绕视角"],
+      features: ["6圈螺旋结构", "星空粒子背景", "环绕视角", "发光焦点"],
+      controls: ["滚轮: 上升/下降节点", "点击节点: 聚焦"],
     },
     sandbox: {
       description: "砂箱探索模式，自由漫游整个时间线空间",
