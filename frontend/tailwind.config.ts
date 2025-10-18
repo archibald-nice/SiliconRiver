@@ -15,6 +15,9 @@ export default {
           input: "var(--color-surface-input)",
           chip: "var(--color-surface-chip)",
         },
+        bubble: {
+          core: "var(--color-bubble-core)",
+        },
         border: {
           default: "var(--color-border)",
           strong: "var(--color-border-strong)",

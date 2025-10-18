@@ -40,10 +40,11 @@ export class TimelineModeFactory implements IModeFactory {
    */
   getAvailableModes(): string[] {
     return [
-      "classic",
-      "river",
       "helix",
+      "river",
+      "classic",
       // 未来模式（当前被注释）
+      // "canyon",
       // "sandbox",
     ];
   }

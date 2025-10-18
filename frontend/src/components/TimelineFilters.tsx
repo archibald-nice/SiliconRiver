@@ -72,8 +72,8 @@ const TimelineFilters = ({
   };
 
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border-default bg-surface-raised p-4 text-sm text-text-secondary transition-colors">
-      <p className="text-sm text-text-secondary">时间范围</p>
+    <div className="flex flex-col gap-2 rounded-xl border border-border-default bg-surface-raised p-4 text-sm text-text-secondary transition-colors">
+      <p className="text-xs font-semibold text-text-secondary">时间范围</p>
       <div className="flex flex-wrap gap-2">
         {PRESET_OPTIONS.map((preset) => (
           <span
@@ -82,7 +82,7 @@ const TimelineFilters = ({
             tabIndex={0}
             onClick={() => onPresetChange(preset.value)}
             onKeyDown={(event) => handleTagKeyPress(event, () => onPresetChange(preset.value))}
-            className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition cursor-pointer select-none ${
+            className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium transition cursor-pointer select-none ${
               activeRange === preset.value
                 ? "border-accent-base bg-accent-base/10 text-accent-base shadow-sm"
                 : "border-border-default bg-surface-overlay text-text-secondary hover:border-accent-base hover:bg-surface-raised hover:text-text-primary"
@@ -105,7 +105,7 @@ const TimelineFilters = ({
         />
         <button
           type="submit"
-          className="rounded-md border border-border-default px-3 py-1 text-sm text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary"
+          className="rounded-md border border-border-default px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary"
         >
           确定
         </button>
@@ -121,7 +121,7 @@ const TimelineFilters = ({
       </form>
 
       {providers.length > 0 ? (
-        <div className="space-y-2 border-t border-border-default pt-4">
+        <div className="space-y-2 border-t border-border-default pt-2">
           <label
             htmlFor={providerSelectId}
             className="block text-xs font-semibold uppercase tracking-wide text-text-muted"
@@ -132,7 +132,7 @@ const TimelineFilters = ({
             id={providerSelectId}
             value={selectedProvider ?? ""}
             onChange={(event) => onProviderChange(event.target.value === "" ? null : event.target.value)}
-            className="w-full rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
+            className="w-full rounded-md border border-border-default bg-surface-input px-3 py-1 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
           >
             <option value="">全部厂商</option>
             {providers.map((provider) => (
@@ -153,7 +153,7 @@ const TimelineFilters = ({
         </div>
       ) : null}
 
-      <div className="space-y-2 border-t border-border-default pt-4">
+      <div className="space-y-2 border-t border-border-default pt-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">模型授权</p>
         <div className="flex flex-wrap gap-2">
           {OPEN_SOURCE_OPTIONS.map((option) => (
@@ -163,7 +163,7 @@ const TimelineFilters = ({
               tabIndex={0}
               onClick={() => onOpenSourceChange(option.value)}
               onKeyDown={(event) => handleTagKeyPress(event, () => onOpenSourceChange(option.value))}
-              className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition cursor-pointer select-none ${
+              className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium transition cursor-pointer select-none ${
                 openSourceFilter === option.value
                   ? "border-accent-base bg-accent-base/10 text-accent-base shadow-sm"
                   : "border-border-default bg-surface-overlay text-text-secondary hover:border-accent-base hover:bg-surface-raised hover:text-text-primary"
@@ -176,7 +176,7 @@ const TimelineFilters = ({
         </div>
       </div>
 
-      <div className="space-y-2 border-t border-border-default pt-4">
+      <div className="space-y-2 border-t border-border-default pt-2">
         <label
           htmlFor={modelSearchId}
           className="block text-xs font-semibold uppercase tracking-wide text-text-muted"
@@ -201,7 +201,7 @@ const TimelineFilters = ({
           <div className="flex gap-2">
             <button
               type="submit"
-              className="rounded-md border border-border-default px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary"
+              className="rounded-md border border-border-default px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary"
             >
               搜索
             </button>
@@ -209,7 +209,7 @@ const TimelineFilters = ({
               <button
                 type="button"
                 onClick={onModelQueryClear}
-                className="rounded-md border border-transparent px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-primary"
+                className="rounded-md border border-transparent px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-primary"
               >
                 清空
               </button>
