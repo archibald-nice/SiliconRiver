@@ -23,6 +23,7 @@ export class ClassicMode extends BaseTimelineMode {
   private targetCameraFocus = new THREE.Vector3();
   private activeColor = new THREE.Color(COLOR_ACTIVE);
   private baseColor = new THREE.Color(COLOR_BASE);
+  private tubeLineColor = COLOR_LINE; // 主题对应的管道颜色
 
   // 几何资源
   private markerGeometry: InstanceType<typeof THREE.SphereGeometry> | null = null;
@@ -40,11 +41,20 @@ export class ClassicMode extends BaseTimelineMode {
   }
 
   async init(config: ModeSceneConfig, dataset: ModeDataset): Promise<void> {
+    // 获取主题并计算背景颜色与线条颜色
+    const theme = config.theme || (document.documentElement.dataset.theme as 'light' | 'dark') || 'dark';
+    const getClassicColors = (t: 'light' | 'dark') => {
+      return t === 'light'
+        ? { bg: 0xffffff, line: COLOR_LINE }
+        : { bg: 0x0f172a, line: 0x1e293b };
+    };
+    const colors = getClassicColors(theme);
+
     // 初始化场景
     this.timelineScene = new TimelineScene({
       container: config.container,
       size: config.size,
-      background: config.background || 0xffffff,
+      background: colors.bg,
       camera: config.camera,
     });
 
@@ -53,6 +63,9 @@ export class ClassicMode extends BaseTimelineMode {
     this.renderer = this.timelineScene.renderer;
     this.controls = this.timelineScene.controls;
     this.dataset = dataset;
+
+    // 保存线条颜色以供 createCurveTube 使用
+    this.tubeLineColor = colors.line;
 
     // 创建时间轴组
     this.timelineGroup = new THREE.Group();
@@ -77,7 +90,7 @@ export class ClassicMode extends BaseTimelineMode {
 
     this.tubeGeometry = new THREE.TubeGeometry(curve, 420, 0.28, 16, false);
     this.tubeMaterial = new THREE.MeshStandardMaterial({
-      color: COLOR_LINE,
+      color: this.tubeLineColor,
       emissive: 0x0f172a
     });
     this.tubeMesh = new THREE.Mesh(this.tubeGeometry, this.tubeMaterial);

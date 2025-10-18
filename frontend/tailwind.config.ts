@@ -18,6 +18,9 @@ export default {
         bubble: {
           core: "var(--color-bubble-core)",
         },
+        avatar: {
+          bg: "var(--color-avatar-bg)",
+        },
         border: {
           default: "var(--color-border)",
           strong: "var(--color-border-strong)",

@@ -72,7 +72,7 @@ const buildPreviewMarkup = (model: TimelineModel) => {
   const providerInitial = model.provider ? model.provider.trim().charAt(0).toUpperCase() || "?" : "?";
 
   const avatar = avatarUrl
-    ? `<div class="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-surface-base text-xs font-semibold text-text-secondary">
+    ? `<div class="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-avatar-bg text-xs font-semibold text-text-secondary">
         <span class="absolute inset-0 flex items-center justify-center transition-opacity avatar-placeholder">${providerInitial}</span>
         <img
           src="${avatarUrl}"
@@ -84,7 +84,7 @@ const buildPreviewMarkup = (model: TimelineModel) => {
           onerror="this.style.display='none'; const placeholder=this.previousElementSibling; if(placeholder){placeholder.style.display='flex'; placeholder.style.opacity='1';}"
         />
       </div>`
-    : `<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-default bg-surface-base text-xs font-semibold text-text-secondary">${providerInitial}</div>`;
+    : `<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-default bg-avatar-bg text-xs font-semibold text-text-secondary">${providerInitial}</div>`;
 
   return `
     <div class="flex items-center gap-2">
@@ -102,6 +102,9 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
   const modeInstanceRef = useRef<ITimelineMode | null>(null);
   const animationFrameIdRef = useRef<number>(0);
   const [currentFocusIndex, setCurrentFocusIndex] = useState(0);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
+    (document.documentElement.dataset.theme as 'light' | 'dark') || 'dark'
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -199,6 +202,28 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
       priceTooltip.style.display = "none";
     };
 
+    // Nearest 快捷按钮
+    const nearestButton = document.createElement("button");
+    nearestButton.className =
+      "absolute right-3 top-3 z-20 rounded-md border border-blue-700 bg-blue-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-blue-800";
+    nearestButton.textContent = "Nearest";
+    nearestButton.style.position = "absolute";
+    nearestButton.style.right = "12px";
+    nearestButton.style.top = "12px";
+    nearestButton.style.zIndex = "20";
+    container.appendChild(nearestButton);
+
+    // Famous 快捷按钮
+    const famousButton = document.createElement("button");
+    famousButton.className =
+      "absolute right-3 z-20 rounded-md border border-amber-700 bg-amber-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-amber-800";
+    famousButton.textContent = "Famous";
+    famousButton.style.position = "absolute";
+    famousButton.style.right = "12px";
+    famousButton.style.top = "52px";
+    famousButton.style.zIndex = "20";
+    container.appendChild(famousButton);
+
     // SVG 引导线
     const leaderSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     leaderSvg.setAttribute("width", `${width}`);
@@ -223,6 +248,9 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     const dataset = buildTimelineDataset(models);
     const sorted = dataset.models;
 
+    // 使用状态中的主题
+    const currentTheme = theme;
+
     // 创建模式实例
     let modeInstance: ITimelineMode;
     try {
@@ -240,6 +268,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
         container,
         size: { width, height },
         background: 0xffffff,
+        theme: currentTheme,
         camera: {
           position: defaultCameraPosition.clone(),
           target: focusAnchor.clone(),
@@ -328,7 +357,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           const avatarUrl = model.avatar_url ? buildProviderAvatarUrl(model.provider) : null;
 
           const avatarMarkup = avatarUrl
-            ? `<div class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-surface-base text-sm font-semibold text-text-secondary">
+            ? `<div class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-avatar-bg text-sm font-semibold text-text-secondary">
                 <span class="absolute inset-0 flex items-center justify-center transition-opacity avatar-placeholder">${providerInitial}</span>
                 <img
                   src="${avatarUrl}"
@@ -340,7 +369,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                   onerror="this.style.display='none'; const placeholder=this.previousElementSibling; if(placeholder){placeholder.style.display='flex'; placeholder.style.opacity='1';}"
                 />
                </div>`
-            : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-surface-base text-sm font-semibold text-text-secondary">${providerInitial}</div>`;
+            : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-avatar-bg text-sm font-semibold text-text-secondary">${providerInitial}</div>`;
 
           const isOpenSource = model.is_open_source !== false;
           const licenseLabel = isOpenSource ? "开源" : "闭源";
@@ -480,11 +509,85 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
 
           raycaster.setFromCamera(pointer, camera);
-          const intersects = raycaster.intersectObjects(markers.map((entry) => entry.mesh));
+
+          // 同时检测模型节点和各类锚点
+          const allMeshes = [...markers.map((entry) => entry.mesh)];
+
+          // 添加年份锚点网格
+          if (modeInstance.getYearAnchors) {
+            const yearAnchors = modeInstance.getYearAnchors();
+            if (yearAnchors) {
+              allMeshes.push(...yearAnchors.map((anchor) => anchor.mesh));
+            }
+          }
+
+          // 添加季度锚点网格
+          if (modeInstance.getQuarterAnchors) {
+            const quarterAnchors = modeInstance.getQuarterAnchors();
+            if (quarterAnchors) {
+              allMeshes.push(...quarterAnchors.map((anchor) => anchor.mesh));
+            }
+          }
+
+          // 添加月份锚点网格
+          if (modeInstance.getMonthAnchors) {
+            const monthAnchors = modeInstance.getMonthAnchors();
+            if (monthAnchors) {
+              allMeshes.push(...monthAnchors.map((anchor) => anchor.mesh));
+            }
+          }
+
+          const intersects = raycaster.intersectObjects(allMeshes);
 
           tooltip.style.visibility = "hidden";
           if (intersects.length > 0) {
             const intersect = intersects[0].object as InstanceType<typeof THREE.Mesh>;
+
+            // 检查是否是年份锚点
+            if (intersect.userData.isYearAnchor) {
+              const year = intersect.userData.year as number;
+              tooltip.innerHTML = `
+                <div class="font-semibold text-red-400">${year} 年起始点</div>
+                <div class="text-xs text-text-muted">点击跳转到该年份的第一个模型</div>
+              `;
+              const { clientX, clientY } = event;
+              tooltip.style.left = `${clientX - bounds.left + 14}px`;
+              tooltip.style.top = `${clientY - bounds.top + 14}px`;
+              tooltip.style.visibility = "visible";
+              return;
+            }
+
+            // 检查是否是季度锚点
+            if (intersect.userData.isQuarterAnchor) {
+              const year = intersect.userData.year as number;
+              const quarter = intersect.userData.quarter as number;
+              tooltip.innerHTML = `
+                <div class="font-semibold text-orange-400">Q${quarter} ${year} 季度起始点</div>
+                <div class="text-xs text-text-muted">点击跳转到该季度的第一个模型</div>
+              `;
+              const { clientX, clientY } = event;
+              tooltip.style.left = `${clientX - bounds.left + 14}px`;
+              tooltip.style.top = `${clientY - bounds.top + 14}px`;
+              tooltip.style.visibility = "visible";
+              return;
+            }
+
+            // 检查是否是月份锚点
+            if (intersect.userData.isMonthAnchor) {
+              const year = intersect.userData.year as number;
+              const month = intersect.userData.month as number;
+              tooltip.innerHTML = `
+                <div class="font-semibold text-yellow-400">${year}-${String(month).padStart(2, '0')} 月份起始点</div>
+                <div class="text-xs text-text-muted">点击跳转到该月份的第一个模型</div>
+              `;
+              const { clientX, clientY } = event;
+              tooltip.style.left = `${clientX - bounds.left + 14}px`;
+              tooltip.style.top = `${clientY - bounds.top + 14}px`;
+              tooltip.style.visibility = "visible";
+              return;
+            }
+
+            // 原有模型节点逻辑
             const model = intersect.userData.model as TimelineModel | undefined;
             if (model) {
               tooltip.innerHTML = `
@@ -523,7 +626,35 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           pointer.x = (upX / bounds.width) * 2 - 1;
           pointer.y = -(upY / bounds.height) * 2 + 1;
           raycaster.setFromCamera(pointer, camera);
-          const intersects = raycaster.intersectObjects(markers.map((entry) => entry.mesh));
+
+          // 同时检测模型节点和各类锚点
+          const allMeshes = [...markers.map((entry) => entry.mesh)];
+
+          // 添加年份锚点网格
+          if (modeInstance.getYearAnchors) {
+            const yearAnchors = modeInstance.getYearAnchors();
+            if (yearAnchors) {
+              allMeshes.push(...yearAnchors.map((anchor) => anchor.mesh));
+            }
+          }
+
+          // 添加季度锚点网格
+          if (modeInstance.getQuarterAnchors) {
+            const quarterAnchors = modeInstance.getQuarterAnchors();
+            if (quarterAnchors) {
+              allMeshes.push(...quarterAnchors.map((anchor) => anchor.mesh));
+            }
+          }
+
+          // 添加月份锚点网格
+          if (modeInstance.getMonthAnchors) {
+            const monthAnchors = modeInstance.getMonthAnchors();
+            if (monthAnchors) {
+              allMeshes.push(...monthAnchors.map((anchor) => anchor.mesh));
+            }
+          }
+
+          const intersects = raycaster.intersectObjects(allMeshes);
 
           if (intersects.length > 0) {
             const mesh = intersects[0].object as InstanceType<typeof THREE.Mesh>;
@@ -552,6 +683,41 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
         renderer.domElement.addEventListener("pointerdown", handlePointerDown);
         renderer.domElement.addEventListener("pointerup", handlePointerUp);
         renderer.domElement.addEventListener("wheel", handleWheel, { passive: false });
+
+        // Nearest 按钮点击事件处理
+        const handleNearest = () => {
+          const latestIndex = markers.length - 1;
+          if (latestIndex >= 0) {
+            lastFocusDirection = latestIndex > currentFocusIndex ? 1 : -1;
+            modeInstance.setFocus(latestIndex);
+          }
+        };
+        nearestButton.addEventListener("click", handleNearest);
+
+        // Famous 按钮点击事件处理 - 根据排名查找最著名的节点
+        const findFamousNode = (): number => {
+          let bestIndex = 0;
+          let bestRank = Infinity;
+
+          sorted.forEach((model, index) => {
+            const rank = model.opencompass_rank || model.huggingface_rank || Infinity;
+            if (rank < bestRank && rank > 0) {
+              bestRank = rank;
+              bestIndex = index;
+            }
+          });
+
+          return bestIndex;
+        };
+
+        const handleFamous = () => {
+          const famousIndex = findFamousNode();
+          if (famousIndex >= 0) {
+            lastFocusDirection = famousIndex > currentFocusIndex ? 1 : -1;
+            modeInstance.setFocus(famousIndex);
+          }
+        };
+        famousButton.addEventListener("click", handleFamous);
 
         const handleResize = () => {
           const newWidth = container.clientWidth;
@@ -725,6 +891,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
           renderer.domElement.removeEventListener("pointerup", handlePointerUp);
           renderer.domElement.removeEventListener("wheel", handleWheel);
+          nearestButton.removeEventListener("click", handleNearest);
+          famousButton.removeEventListener("click", handleFamous);
 
           tooltip.remove();
           focusPrimaryBubble.remove();
@@ -733,6 +901,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           nextHintLabel.remove();
           prevHintLabel.remove();
           priceTooltip.remove();
+          nearestButton.remove();
+          famousButton.remove();
           leaderSvg.remove();
 
           markerGeometry.dispose();
@@ -760,7 +930,33 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
         modeInstanceRef.current = null;
       }
     };
-  }, [models, mode]);
+  }, [models, mode, theme]);
+
+  // 监听全局主题变化，立即重新渲染时间轴
+  useEffect(() => {
+    // 使用 MutationObserver 监听 data-theme 属性变化
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+          // 主题已变化，更新状态以触发主要 useEffect 重新执行
+          const newTheme = (document.documentElement.dataset.theme as 'light' | 'dark') || 'dark';
+          setTheme(newTheme);
+          console.log(`[Theme Change] 主题已切换至: ${newTheme}`);
+          break;
+        }
+      }
+    });
+
+    // 开始监听 document.documentElement 的属性变化
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   return <div ref={containerRef} className="relative h-full w-full" />;
 };

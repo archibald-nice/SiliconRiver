@@ -10,6 +10,7 @@
   --color-surface-input: rgba(15, 23, 42, 0.82);
   --color-surface-chip: rgba(30, 41, 59, 0.65);
   --color-bubble-core: #1e293b;
+  --color-avatar-bg: #34495e;
   --color-border: rgba(148, 163, 184, 0.22);
   --color-border-strong: rgba(148, 163, 184, 0.35);
   --color-text-primary: #e2e8f0;
@@ -30,6 +31,7 @@
   --color-surface-input: rgba(226, 232, 240, 0.85);
   --color-surface-chip: rgba(148, 163, 184, 0.2);
   --color-bubble-core: #f1f5f9;
+  --color-avatar-bg: #ecf0f1;
   --color-border: rgba(15, 23, 42, 0.12);
   --color-border-strong: rgba(15, 23, 42, 0.2);
   --color-text-primary: #0f172a;

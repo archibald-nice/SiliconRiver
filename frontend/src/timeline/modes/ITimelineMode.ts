@@ -19,6 +19,7 @@ export type ModeSceneConfig = {
   container: HTMLElement;
   size: { width: number; height: number };
   background?: ConstructorParameters<typeof THREE.Color>[0];
+  theme?: 'light' | 'dark';
   camera?: {
     fov?: number;
     near?: number;
@@ -179,9 +180,19 @@ export interface ITimelineMode {
   onWheelEvent(callback: WheelEventCallback): void;
 
   /**
-   * 获取模式特定的选项 UI（可选）
+   * 获取年份锚点数组（用于交互）
    */
-  getOptionsUI?(): HTMLElement | null;
+  getYearAnchors?(): Array<{ year: number; mesh: InstanceType<typeof THREE.Mesh> }>;
+
+  /**
+   * 获取季度锚点数组（用于交互）
+   */
+  getQuarterAnchors?(): Array<{ year: number; quarter: number; mesh: InstanceType<typeof THREE.Mesh> }>;
+
+  /**
+   * 获取月份锚点数组（用于交互）
+   */
+  getMonthAnchors?(): Array<{ year: number; month: number; mesh: InstanceType<typeof THREE.Mesh> }>;
 
   /**
    * 预热（预加载资源等）
