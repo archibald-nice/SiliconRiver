@@ -36,6 +36,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
   // 颜色
   private activeColor = new THREE.Color(COLOR_ACTIVE);
   private baseColor = new THREE.Color(COLOR_BASE);
+  private focusStarColor = new THREE.Color(0xf4d03f); // 柔和暖黄色（聚焦星星效果）
 
   // 几何资源
   private markerGeometry: InstanceType<typeof THREE.SphereGeometry> | null = null;
@@ -48,6 +49,38 @@ export class HelixConstellationMode extends BaseTimelineMode {
   private glowSprite: InstanceType<typeof THREE.Sprite> | null = null;
   private glowMaterial: InstanceType<typeof THREE.SpriteMaterial> | null = null;
 
+  // 年份锚点相关
+  private yearAnchors: Array<{
+    year: number;
+    timestamp: number;
+    position: InstanceType<typeof THREE.Vector3>;
+    mesh: InstanceType<typeof THREE.Mesh>;
+  }> = [];
+  private yearAnchorGeometry: InstanceType<typeof THREE.SphereGeometry> | null = null;
+  private yearAnchorMaterial: InstanceType<typeof THREE.MeshStandardMaterial> | null = null;
+
+  // 季度锚点相关
+  private quarterAnchors: Array<{
+    year: number;
+    quarter: number;
+    timestamp: number;
+    position: InstanceType<typeof THREE.Vector3>;
+    mesh: InstanceType<typeof THREE.Mesh>;
+  }> = [];
+  private quarterAnchorGeometry: InstanceType<typeof THREE.SphereGeometry> | null = null;
+  private quarterAnchorMaterial: InstanceType<typeof THREE.MeshStandardMaterial> | null = null;
+
+  // 月份锚点相关
+  private monthAnchors: Array<{
+    year: number;
+    month: number;
+    timestamp: number;
+    position: InstanceType<typeof THREE.Vector3>;
+    mesh: InstanceType<typeof THREE.Mesh>;
+  }> = [];
+  private monthAnchorGeometry: InstanceType<typeof THREE.SphereGeometry> | null = null;
+  private monthAnchorMaterial: InstanceType<typeof THREE.MeshStandardMaterial> | null = null;
+
   private focusAnchor = getDefaultFocusAnchor();
 
   getName(): string {
@@ -55,11 +88,19 @@ export class HelixConstellationMode extends BaseTimelineMode {
   }
 
   async init(config: ModeSceneConfig, dataset: ModeDataset): Promise<void> {
+    // 获取主题并计算背景颜色
+    const theme = config.theme || (document.documentElement.dataset.theme as 'light' | 'dark') || 'dark';
+    const getHelixBackground = (t: 'light' | 'dark') => {
+      return t === 'light' ? 0xd6e4f5 : 0x0a0e27;
+    };
+    const bgColor = getHelixBackground(theme);
+    const fogColor = bgColor;
+
     // 初始化场景
     this.timelineScene = new TimelineScene({
       container: config.container,
       size: config.size,
-      background: 0x0a0e27, // 深蓝色太空背景
+      background: bgColor,
       camera: config.camera,
     });
 
@@ -79,7 +120,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
     this.scene.add(this.timelineGroup);
 
     // 添加雾化效果（太空深处）
-    this.scene.fog = new THREE.Fog(0x0a0e27, 30, 120);
+    this.scene.fog = new THREE.Fog(fogColor, 30, 120);
 
     // 创建螺旋路径
     this.createHelixPath();
@@ -264,6 +305,45 @@ export class HelixConstellationMode extends BaseTimelineMode {
         this.glowMaterial = null;
       }
 
+      // 清理年份锚点
+      this.yearAnchors.forEach(anchor => {
+        if (this.timelineGroup) {
+          this.timelineGroup.remove(anchor.mesh);
+        }
+        (anchor.mesh.material as THREE.Material).dispose();
+      });
+      this.yearAnchors = [];
+      this.yearAnchorGeometry?.dispose();
+      this.yearAnchorMaterial?.dispose();
+      this.yearAnchorGeometry = null;
+      this.yearAnchorMaterial = null;
+
+      // 清理季度锚点
+      this.quarterAnchors.forEach(anchor => {
+        if (this.timelineGroup) {
+          this.timelineGroup.remove(anchor.mesh);
+        }
+        (anchor.mesh.material as THREE.Material).dispose();
+      });
+      this.quarterAnchors = [];
+      this.quarterAnchorGeometry?.dispose();
+      this.quarterAnchorMaterial?.dispose();
+      this.quarterAnchorGeometry = null;
+      this.quarterAnchorMaterial = null;
+
+      // 清理月份锚点
+      this.monthAnchors.forEach(anchor => {
+        if (this.timelineGroup) {
+          this.timelineGroup.remove(anchor.mesh);
+        }
+        (anchor.mesh.material as THREE.Material).dispose();
+      });
+      this.monthAnchors = [];
+      this.monthAnchorGeometry?.dispose();
+      this.monthAnchorMaterial?.dispose();
+      this.monthAnchorGeometry = null;
+      this.monthAnchorMaterial = null;
+
       // 清理组和节点
       if (this.timelineGroup && this.scene) {
         this.nodes.forEach((node) => node.dispose(this.timelineGroup!));
@@ -301,12 +381,103 @@ export class HelixConstellationMode extends BaseTimelineMode {
   }
 
   handleNodeClick(mesh: InstanceType<typeof THREE.Mesh>): number | null {
+    // 检查是否点击了年份锚点
+    if (mesh.userData.isYearAnchor) {
+      return this.handleYearAnchorClick(mesh);
+    }
+
+    // 检查是否点击了季度锚点
+    if (mesh.userData.isQuarterAnchor) {
+      return this.handleQuarterAnchorClick(mesh);
+    }
+
+    // 检查是否点击了月份锚点
+    if (mesh.userData.isMonthAnchor) {
+      return this.handleMonthAnchorClick(mesh);
+    }
+
     const index =
       typeof mesh.userData.markerIndex === "number"
         ? mesh.userData.markerIndex
         : this.nodes.findIndex((node) => node.mesh === mesh);
 
     return index >= 0 && index < this.nodes.length ? index : null;
+  }
+
+  /**
+   * 处理年份锚点点击
+   * @returns 该年份后的第一个模型索引
+   */
+  private handleYearAnchorClick(mesh: THREE.Mesh): number | null {
+    const year = mesh.userData.year as number;
+    const yearTimestamp = mesh.userData.timestamp as number;
+
+    console.log(`[YearAnchor] Clicked on year ${year} anchor`);
+
+    // 查找该年份后的第一个模型节点
+    const firstModelIndex = this.nodes.findIndex((node) => {
+      const modelTime = new Date(node.model.created_at).getTime();
+      return modelTime >= yearTimestamp;
+    });
+
+    if (firstModelIndex >= 0) {
+      console.log(`[YearAnchor] Jumping to first model of ${year} at index ${firstModelIndex}`);
+      return firstModelIndex;
+    }
+
+    // 如果该年份之后没有模型，返回 null
+    console.log(`[YearAnchor] No models found after ${year}, staying at current position`);
+    return null;
+  }
+
+  /**
+   * 处理季度锚点点击
+   */
+  private handleQuarterAnchorClick(mesh: THREE.Mesh): number | null {
+    const year = mesh.userData.year as number;
+    const quarter = mesh.userData.quarter as number;
+    const quarterTimestamp = mesh.userData.timestamp as number;
+
+    console.log(`[QuarterAnchor] Clicked on Q${quarter} ${year} anchor`);
+
+    // 查找该季度后的第一个模型节点
+    const firstModelIndex = this.nodes.findIndex((node) => {
+      const modelTime = new Date(node.model.created_at).getTime();
+      return modelTime >= quarterTimestamp;
+    });
+
+    if (firstModelIndex >= 0) {
+      console.log(`[QuarterAnchor] Jumping to first model of Q${quarter} ${year} at index ${firstModelIndex}`);
+      return firstModelIndex;
+    }
+
+    console.log(`[QuarterAnchor] No models found after Q${quarter} ${year}`);
+    return null;
+  }
+
+  /**
+   * 处理月份锚点点击
+   */
+  private handleMonthAnchorClick(mesh: THREE.Mesh): number | null {
+    const year = mesh.userData.year as number;
+    const month = mesh.userData.month as number;
+    const monthTimestamp = mesh.userData.timestamp as number;
+
+    console.log(`[MonthAnchor] Clicked on ${year}-${String(month).padStart(2, '0')} anchor`);
+
+    // 查找该月份后的第一个模型节点
+    const firstModelIndex = this.nodes.findIndex((node) => {
+      const modelTime = new Date(node.model.created_at).getTime();
+      return modelTime >= monthTimestamp;
+    });
+
+    if (firstModelIndex >= 0) {
+      console.log(`[MonthAnchor] Jumping to first model of ${year}-${String(month).padStart(2, '0')} at index ${firstModelIndex}`);
+      return firstModelIndex;
+    }
+
+    console.log(`[MonthAnchor] No models found after ${year}-${String(month).padStart(2, '0')}`);
+    return null;
   }
 
   layoutNodes(nodes: TimelineEventNode[]): void {
@@ -374,11 +545,264 @@ export class HelixConstellationMode extends BaseTimelineMode {
 
     console.log(`[HelixMode] Total nodes laid out: ${this.nodes.length}`);
 
+    // 创建年份、季度、月份锚点
+    this.createYearAnchors();
+    this.createQuarterAnchors();
+    this.createMonthAnchors();
+
     // 初始聚焦最新节点（最后一个）
     if (this.nodes.length > 0) {
       this.currentFocusIndex = this.nodes.length - 1;
       this.applyFocus();
     }
+  }
+
+  /**
+   * 计算并创建年份锚点
+   */
+  private createYearAnchors(): void {
+    if (!this.dataset || !this.timelineGroup) return;
+
+    const minTime = this.dataset.minTime;
+    const maxTime = this.dataset.maxTime;
+    const span = this.dataset.span;
+
+    // 提取起始年份和结束年份
+    const startDate = new Date(minTime);
+    const endDate = new Date(maxTime);
+    const startYear = startDate.getUTCFullYear();
+    const endYear = endDate.getUTCFullYear();
+
+    console.log(`[YearAnchors] Timeline range: ${startYear}-${endYear}`);
+
+    // 清空旧锚点
+    this.yearAnchors.forEach(anchor => {
+      if (this.timelineGroup) {
+        this.timelineGroup.remove(anchor.mesh);
+      }
+      (anchor.mesh.material as THREE.Material).dispose();
+    });
+    this.yearAnchors = [];
+
+    // 创建几何和材质（复用）
+    if (!this.yearAnchorGeometry) {
+      this.yearAnchorGeometry = new THREE.SphereGeometry(0.15, 16, 16);
+    }
+
+    if (!this.yearAnchorMaterial) {
+      this.yearAnchorMaterial = new THREE.MeshStandardMaterial({
+        color: 0xff3333,
+        emissive: 0xff0000,
+        emissiveIntensity: 0.8,
+        transparent: true,
+        opacity: 1.0,
+      });
+    }
+
+    // 遍历每个整年份
+    for (let year = startYear; year <= endYear + 1; year++) {
+      // 计算该年份 1 月 1 日 00:00:00 UTC 的时间戳
+      const yearStartDate = new Date(Date.UTC(year, 0, 1, 0, 0, 0));
+      const yearTimestamp = yearStartDate.getTime();
+
+      // 检查是否在时间轴范围内
+      if (yearTimestamp < minTime || yearTimestamp > maxTime) {
+        continue;
+      }
+
+      // 计算归一化位置 t（0.0 - 1.0）
+      const t = span > 0 ? (yearTimestamp - minTime) / span : 0;
+
+      // 转换为螺旋位置
+      const position = this.timeToHelixPosition(t);
+
+      // 创建锚点网格
+      const anchorMesh = new THREE.Mesh(
+        this.yearAnchorGeometry,
+        this.yearAnchorMaterial.clone()
+      );
+      anchorMesh.position.copy(position);
+      anchorMesh.userData.isYearAnchor = true;
+      anchorMesh.userData.year = year;
+      anchorMesh.userData.timestamp = yearTimestamp;
+
+      this.timelineGroup.add(anchorMesh);
+
+      // 记录锚点信息
+      this.yearAnchors.push({
+        year,
+        timestamp: yearTimestamp,
+        position: position.clone(),
+        mesh: anchorMesh,
+      });
+
+      console.log(`[YearAnchors] Created anchor for ${year} at t=${t.toFixed(4)}, pos=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
+    }
+
+    console.log(`[YearAnchors] Total anchors created: ${this.yearAnchors.length}`);
+  }
+
+  /**
+   * 计算并创建季度锚点
+   */
+  private createQuarterAnchors(): void {
+    if (!this.dataset || !this.timelineGroup) return;
+
+    const minTime = this.dataset.minTime;
+    const maxTime = this.dataset.maxTime;
+    const span = this.dataset.span;
+
+    const startDate = new Date(minTime);
+    const endDate = new Date(maxTime);
+    const startYear = startDate.getUTCFullYear();
+    const endYear = endDate.getUTCFullYear();
+
+    console.log(`[QuarterAnchors] Timeline range: ${startYear}-${endYear}`);
+
+    // 清空旧锚点
+    this.quarterAnchors.forEach(anchor => {
+      if (this.timelineGroup) {
+        this.timelineGroup.remove(anchor.mesh);
+      }
+      (anchor.mesh.material as THREE.Material).dispose();
+    });
+    this.quarterAnchors = [];
+
+    // 创建几何和材质（复用）
+    if (!this.quarterAnchorGeometry) {
+      this.quarterAnchorGeometry = new THREE.SphereGeometry(0.12, 16, 16); // 比年份小
+    }
+
+    if (!this.quarterAnchorMaterial) {
+      this.quarterAnchorMaterial = new THREE.MeshStandardMaterial({
+        color: 0xff8833, // 橙色
+        emissive: 0xff6600,
+        emissiveIntensity: 0.6,
+        transparent: true,
+        opacity: 1.0,
+      });
+    }
+
+    // 遍历每个季度
+    for (let year = startYear; year <= endYear; year++) {
+      for (let quarter = 1; quarter <= 4; quarter++) {
+        const month = (quarter - 1) * 3; // Q1: 0, Q2: 3, Q3: 6, Q4: 9
+        const quarterStartDate = new Date(Date.UTC(year, month, 1, 0, 0, 0));
+        const quarterTimestamp = quarterStartDate.getTime();
+
+        // 检查是否在时间轴范围内
+        if (quarterTimestamp < minTime || quarterTimestamp > maxTime) {
+          continue;
+        }
+
+        const t = span > 0 ? (quarterTimestamp - minTime) / span : 0;
+        const position = this.timeToHelixPosition(t);
+
+        const anchorMesh = new THREE.Mesh(
+          this.quarterAnchorGeometry,
+          this.quarterAnchorMaterial.clone()
+        );
+        anchorMesh.position.copy(position);
+        anchorMesh.userData.isQuarterAnchor = true;
+        anchorMesh.userData.year = year;
+        anchorMesh.userData.quarter = quarter;
+        anchorMesh.userData.timestamp = quarterTimestamp;
+
+        this.timelineGroup.add(anchorMesh);
+
+        this.quarterAnchors.push({
+          year,
+          quarter,
+          timestamp: quarterTimestamp,
+          position: position.clone(),
+          mesh: anchorMesh,
+        });
+
+        console.log(`[QuarterAnchors] Created anchor for Q${quarter} ${year} at t=${t.toFixed(4)}`);
+      }
+    }
+
+    console.log(`[QuarterAnchors] Total anchors created: ${this.quarterAnchors.length}`);
+  }
+
+  /**
+   * 计算并创建月份锚点
+   */
+  private createMonthAnchors(): void {
+    if (!this.dataset || !this.timelineGroup) return;
+
+    const minTime = this.dataset.minTime;
+    const maxTime = this.dataset.maxTime;
+    const span = this.dataset.span;
+
+    const startDate = new Date(minTime);
+    const endDate = new Date(maxTime);
+    const startYear = startDate.getUTCFullYear();
+    const endYear = endDate.getUTCFullYear();
+
+    console.log(`[MonthAnchors] Timeline range: ${startYear}-${endYear}`);
+
+    // 清空旧锚点
+    this.monthAnchors.forEach(anchor => {
+      if (this.timelineGroup) {
+        this.timelineGroup.remove(anchor.mesh);
+      }
+      (anchor.mesh.material as THREE.Material).dispose();
+    });
+    this.monthAnchors = [];
+
+    // 创建几何和材质（复用）
+    if (!this.monthAnchorGeometry) {
+      this.monthAnchorGeometry = new THREE.SphereGeometry(0.08, 16, 16); // 最小
+    }
+
+    if (!this.monthAnchorMaterial) {
+      this.monthAnchorMaterial = new THREE.MeshStandardMaterial({
+        color: 0xffcc33, // 黄色
+        emissive: 0xffbb00,
+        emissiveIntensity: 0.4,
+        transparent: true,
+        opacity: 0.8,
+      });
+    }
+
+    // 遍历每个月份
+    for (let year = startYear; year <= endYear; year++) {
+      for (let month = 0; month < 12; month++) {
+        const monthStartDate = new Date(Date.UTC(year, month, 1, 0, 0, 0));
+        const monthTimestamp = monthStartDate.getTime();
+
+        // 检查是否在时间轴范围内
+        if (monthTimestamp < minTime || monthTimestamp > maxTime) {
+          continue;
+        }
+
+        const t = span > 0 ? (monthTimestamp - minTime) / span : 0;
+        const position = this.timeToHelixPosition(t);
+
+        const anchorMesh = new THREE.Mesh(
+          this.monthAnchorGeometry,
+          this.monthAnchorMaterial.clone()
+        );
+        anchorMesh.position.copy(position);
+        anchorMesh.userData.isMonthAnchor = true;
+        anchorMesh.userData.year = year;
+        anchorMesh.userData.month = month + 1; // 1-12
+        anchorMesh.userData.timestamp = monthTimestamp;
+
+        this.timelineGroup.add(anchorMesh);
+
+        this.monthAnchors.push({
+          year,
+          month: month + 1,
+          timestamp: monthTimestamp,
+          position: position.clone(),
+          mesh: anchorMesh,
+        });
+      }
+    }
+
+    console.log(`[MonthAnchors] Total anchors created: ${this.monthAnchors.length}`);
   }
 
   private applyFocus(): void {
@@ -423,13 +847,13 @@ export class HelixConstellationMode extends BaseTimelineMode {
       const distance = Math.abs(index - this.currentFocusIndex);
 
       if (distance === 0) {
-        // 当前焦点：稍大一些，发光
-        entry.setTargetState({ scale: 1.5, opacity: 1.0, color: this.activeColor });
+        // 当前焦点：柔和暖黄色星星，发光
+        entry.setTargetState({ scale: 0.5, opacity: 1.0, color: this.focusStarColor });
       } else if (distance <= 3) {
         // 近距离节点
         const proximity = 1 - distance / 3;
         entry.setTargetState({
-          scale: 0.8 + proximity * 0.5,
+          scale: 0.27 + proximity * 0.17,
           opacity: 0.7 + proximity * 0.3,
           color: this.baseColor,
         });
@@ -437,13 +861,13 @@ export class HelixConstellationMode extends BaseTimelineMode {
         // 中等距离节点
         const proximity = 1 - (distance - 3) / 7;
         entry.setTargetState({
-          scale: 0.5 + proximity * 0.3,
+          scale: 0.17 + proximity * 0.1,
           opacity: 0.4 + proximity * 0.3,
           color: this.baseColor,
         });
       } else {
         // 远距离节点：几乎不可见（小星点）
-        entry.setTargetState({ scale: 0.3, opacity: 0.15, color: this.baseColor });
+        entry.setTargetState({ scale: 0.1, opacity: 0.15, color: this.baseColor });
       }
     });
 
@@ -463,6 +887,38 @@ export class HelixConstellationMode extends BaseTimelineMode {
 
   getCurrentFocusIndex(): number {
     return this.currentFocusIndex;
+  }
+
+  /**
+   * 获取年份锚点数组（用于交互）
+   */
+  getYearAnchors(): Array<{ year: number; mesh: InstanceType<typeof THREE.Mesh> }> {
+    return this.yearAnchors.map(anchor => ({
+      year: anchor.year,
+      mesh: anchor.mesh,
+    }));
+  }
+
+  /**
+   * 获取季度锚点数组（用于交互）
+   */
+  getQuarterAnchors(): Array<{ year: number; quarter: number; mesh: InstanceType<typeof THREE.Mesh> }> {
+    return this.quarterAnchors.map(anchor => ({
+      year: anchor.year,
+      quarter: anchor.quarter,
+      mesh: anchor.mesh,
+    }));
+  }
+
+  /**
+   * 获取月份锚点数组（用于交互）
+   */
+  getMonthAnchors(): Array<{ year: number; month: number; mesh: InstanceType<typeof THREE.Mesh> }> {
+    return this.monthAnchors.map(anchor => ({
+      year: anchor.year,
+      month: anchor.month,
+      mesh: anchor.mesh,
+    }));
   }
 
   getCameraControlState(): CameraControlState {
@@ -669,6 +1125,15 @@ export class HelixConstellationMode extends BaseTimelineMode {
       this.glowSprite.material.rotation = time * 0.5;
     }
 
+    // 更新年份锚点闪烁动画
+    this.updateYearAnchorAnimation();
+
+    // 更新季度锚点闪烁动画
+    this.updateQuarterAnchorAnimation();
+
+    // 更新月份锚点闪烁动画
+    this.updateMonthAnchorAnimation();
+
     // 更新所有节点的过渡动画
     this.nodes.forEach((entry) => {
       entry.updateTransition();
@@ -676,6 +1141,75 @@ export class HelixConstellationMode extends BaseTimelineMode {
 
     // 不调用 controls.update()，因为我们已经禁用了 OrbitControls
     // 完全由我们的代码控制相机位置和朝向
+  }
+
+  /**
+   * 更新年份锚点的闪烁动画
+   */
+  private updateYearAnchorAnimation(): void {
+    const time = Date.now() * 0.001; // 转换为秒
+
+    this.yearAnchors.forEach((anchor) => {
+      const material = anchor.mesh.material as THREE.MeshStandardMaterial;
+
+      // 透明度闪烁（0.4 - 1.0 之间）
+      const opacityPulse = 0.7 + Math.sin(time * 3.0) * 0.3;
+      material.opacity = opacityPulse;
+
+      // 发光强度闪烁（0.5 - 1.5 之间）
+      const emissivePulse = 1.0 + Math.sin(time * 3.0) * 0.5;
+      material.emissiveIntensity = emissivePulse;
+
+      // 缩放脉动（更明显）
+      const scalePulse = 1.0 + Math.sin(time * 3.0) * 0.2;
+      anchor.mesh.scale.setScalar(scalePulse);
+    });
+  }
+
+  /**
+   * 更新季度锚点的闪烁动画
+   */
+  private updateQuarterAnchorAnimation(): void {
+    const time = Date.now() * 0.001;
+
+    this.quarterAnchors.forEach((anchor) => {
+      const material = anchor.mesh.material as THREE.MeshStandardMaterial;
+
+      // 透明度闪烁（略小于年份锚点）
+      const opacityPulse = 0.6 + Math.sin(time * 2.5) * 0.3;
+      material.opacity = opacityPulse;
+
+      // 发光强度闪烁（频率略低）
+      const emissivePulse = 0.8 + Math.sin(time * 2.5) * 0.4;
+      material.emissiveIntensity = emissivePulse;
+
+      // 缩放脉动
+      const scalePulse = 1.0 + Math.sin(time * 2.5) * 0.15;
+      anchor.mesh.scale.setScalar(scalePulse);
+    });
+  }
+
+  /**
+   * 更新月份锚点的闪烁动画
+   */
+  private updateMonthAnchorAnimation(): void {
+    const time = Date.now() * 0.001;
+
+    this.monthAnchors.forEach((anchor) => {
+      const material = anchor.mesh.material as THREE.MeshStandardMaterial;
+
+      // 透明度闪烁（最小的脉动）
+      const opacityPulse = 0.5 + Math.sin(time * 2.0) * 0.25;
+      material.opacity = opacityPulse;
+
+      // 发光强度闪烁（频率最低）
+      const emissivePulse = 0.6 + Math.sin(time * 2.0) * 0.3;
+      material.emissiveIntensity = emissivePulse;
+
+      // 缩放脉动
+      const scalePulse = 1.0 + Math.sin(time * 2.0) * 0.1;
+      anchor.mesh.scale.setScalar(scalePulse);
+    });
   }
 
   onWindowResize(width: number, height: number): void {

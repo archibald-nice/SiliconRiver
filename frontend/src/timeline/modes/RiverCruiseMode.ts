@@ -13,6 +13,7 @@ export class RiverCruiseMode extends BaseTimelineMode {
   private timelineScene: TimelineScene | null = null;
   private timelineGroup: InstanceType<typeof THREE.Group> | null = null;
   private riverMesh: InstanceType<typeof THREE.Mesh> | null = null;
+  private riverEdgeMesh: InstanceType<typeof THREE.Mesh> | null = null;
   private dockPoints: InstanceType<typeof THREE.Vector3>[] = [];
   private currentDockIndex = 0;
 
@@ -46,11 +47,19 @@ export class RiverCruiseMode extends BaseTimelineMode {
   }
 
   async init(config: ModeSceneConfig, dataset: ModeDataset): Promise<void> {
+    // 获取主题并计算背景颜色
+    const theme = config.theme || (document.documentElement.dataset.theme as 'light' | 'dark') || 'dark';
+    const getRiverBackground = (t: 'light' | 'dark') => {
+      return t === 'light' ? 0xe0f2fe : 0x0f1729;
+    };
+    const bgColor = getRiverBackground(theme);
+    const fogColor = bgColor;
+
     // 初始化场景
     this.timelineScene = new TimelineScene({
       container: config.container,
       size: config.size,
-      background: 0xe0f2fe, // 浅蓝色天空背景
+      background: bgColor,
       camera: config.camera,
     });
 
@@ -65,7 +74,7 @@ export class RiverCruiseMode extends BaseTimelineMode {
     this.scene.add(this.timelineGroup);
 
     // 添加雾化效果
-    this.scene.fog = new THREE.Fog(0xe0f2fe, 15, 60);
+    this.scene.fog = new THREE.Fog(fogColor, 15, 60);
 
     // 创建河道
     this.createRiverMesh(dataset.curve);
@@ -209,6 +218,98 @@ export class RiverCruiseMode extends BaseTimelineMode {
     return texture;
   }
 
+  /**
+   * 创建河道边缘模糊效果
+   * 在河道两侧添加半透明"雾气"网格，实现从中心到边缘的渐变
+   */
+  private createRiverEdgeFade(curve: InstanceType<typeof THREE.CatmullRomCurve3>): void {
+    if (!this.timelineGroup) return;
+
+    const points = curve.getPoints(this.RIVER_SEGMENTS);
+    const vertices: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+
+    // 为每个点创建边缘雾气横截面
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i];
+      const nextPoint = points[Math.min(i + 1, points.length - 1)];
+
+      // 计算切线方向
+      const tangent = new THREE.Vector3().subVectors(nextPoint, point).normalize();
+
+      // 计算垂直于切线的方向（河道宽度方向）
+      const perpendicular = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+
+      // 创建边缘雾气的多个顶点（从河道边缘向外扩展）
+      const edgeWidth = this.RIVER_WIDTH / 2;
+      const fadeWidth = 1.2; // 雾气扩展宽度
+
+      // 左侧边缘
+      const leftEdge = point.clone().add(perpendicular.clone().multiplyScalar(edgeWidth));
+      const leftFade = point.clone().add(perpendicular.clone().multiplyScalar(edgeWidth + fadeWidth));
+
+      // 右侧边缘
+      const rightEdge = point.clone().add(perpendicular.clone().multiplyScalar(-edgeWidth));
+      const rightFade = point.clone().add(perpendicular.clone().multiplyScalar(-edgeWidth - fadeWidth));
+
+      // 左侧顶点对
+      vertices.push(leftEdge.x, leftEdge.y, leftEdge.z);
+      uvs.push(0, i / points.length * 5);
+      vertices.push(leftFade.x, leftFade.y, leftFade.z);
+      uvs.push(1, i / points.length * 5);
+
+      // 右侧顶点对
+      vertices.push(rightEdge.x, rightEdge.y, rightEdge.z);
+      uvs.push(0, i / points.length * 5);
+      vertices.push(rightFade.x, rightFade.y, rightFade.z);
+      uvs.push(1, i / points.length * 5);
+
+      // 创建三角形索引
+      if (i < points.length - 1) {
+        const baseIndex = i * 4;
+        // 左侧：边缘到淡出
+        indices.push(baseIndex, baseIndex + 1, baseIndex + 5);
+        indices.push(baseIndex, baseIndex + 5, baseIndex + 4);
+        // 右侧：边缘到淡出
+        indices.push(baseIndex + 2, baseIndex + 3, baseIndex + 7);
+        indices.push(baseIndex + 2, baseIndex + 7, baseIndex + 6);
+      }
+    }
+
+    // 创建几何体
+    const edgeGeometry = new THREE.BufferGeometry();
+    edgeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    edgeGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    edgeGeometry.setIndex(indices);
+
+    // 创建边缘材质 - 使用顶点着色器实现渐变
+    const edgeMaterial = new THREE.ShaderMaterial({
+      uniforms: {},
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        void main() {
+          // 从中心（uv.x=0）到边缘（uv.x=1）的渐变
+          float alpha = smoothstep(0.0, 1.0, vUv.x);
+          // 边缘雾气：从不透明到完全透明
+          gl_FragColor = vec4(0.224, 0.945, 0.996, 0.3 * alpha); // 浅蓝色雾气
+        }
+      `,
+      transparent: true,
+      side: THREE.DoubleSide,
+    });
+
+    this.riverEdgeMesh = new THREE.Mesh(edgeGeometry, edgeMaterial);
+    this.timelineGroup.add(this.riverEdgeMesh);
+  }
+
   dispose(): void {
     try {
       // 清理几何资源
@@ -216,6 +317,14 @@ export class RiverCruiseMode extends BaseTimelineMode {
       this.riverGeometry?.dispose();
       this.riverMaterial?.dispose();
       this.waterNormalMap?.dispose();
+
+      // 清理边缘网格
+      if (this.riverEdgeMesh && this.timelineGroup) {
+        this.timelineGroup.remove(this.riverEdgeMesh);
+        this.riverEdgeMesh.geometry.dispose();
+        (this.riverEdgeMesh.material as THREE.ShaderMaterial).dispose();
+        this.riverEdgeMesh = null;
+      }
 
       // 清理组和节点
       if (this.timelineGroup && this.scene) {
@@ -313,6 +422,11 @@ export class RiverCruiseMode extends BaseTimelineMode {
         }
       }
     });
+
+    // 创建河道边缘模糊效果
+    if (this.dockPoints.length > 0) {
+      this.createRiverEdgeFade(curve);
+    }
 
     // 初始聚焦最新节点
     if (this.nodes.length > 0) {
@@ -446,7 +560,7 @@ export class RiverCruiseMode extends BaseTimelineMode {
     this.camera.lookAt(this.cameraLookAt);
 
     // 更新水流动画 - 通过偏移法线贴图来模拟流动
-    this.riverUvOffset += 0.004; // 增加流动速度
+    this.riverUvOffset += 0.008; // 提高流动速度 (0.004 → 0.008)
 
     // 实时顶点动画 - 让水面真正波动
     if (this.riverGeometry && this.originalVertices) {
@@ -458,13 +572,14 @@ export class RiverCruiseMode extends BaseTimelineMode {
         const x = this.originalVertices[i];
         const z = this.originalVertices[i + 2];
 
-        // 多层波浪叠加
-        const wave1 = Math.sin(x * 0.5 + time * 2) * 0.15;
-        const wave2 = Math.sin(z * 0.8 + time * 3) * 0.12;
-        const wave3 = Math.sin((x + z) * 0.3 + time * 1.5) * 0.08;
+        // 增强的多层波浪叠加 - 增加振幅和频率多样性
+        const wave1 = Math.sin(x * 0.7 + time * 2.5) * 0.25; // 主波浪 - 增强
+        const wave2 = Math.sin(z * 1.2 + time * 3.5) * 0.18; // 次波浪 - 增强
+        const wave3 = Math.sin((x + z) * 0.5 + time * 2) * 0.12; // 涟漪 - 增强
+        const wave4 = Math.sin((x - z) * 0.8 + time * 1.8) * 0.08; // 微波 - 新增
 
         // 应用波浪高度
-        positions[i + 1] = this.originalVertices[i + 1] + wave1 + wave2 + wave3;
+        positions[i + 1] = this.originalVertices[i + 1] + wave1 + wave2 + wave3 + wave4;
       }
 
       positionAttribute.needsUpdate = true;
@@ -481,24 +596,24 @@ export class RiverCruiseMode extends BaseTimelineMode {
 
     // 材质动画效果
     if (this.riverMaterial) {
-      // 波动法线强度
-      const wave = Math.sin(this.riverUvOffset * 5) * 0.5 + 1.5;
+      // 波动法线强度 - 增强变化幅度
+      const wave = Math.sin(this.riverUvOffset * 5) * 0.7 + 1.8; // 增大振幅
       this.riverMaterial.normalScale.set(wave * 2.5, wave * 2.5);
 
-      // 发光强度脉动
-      const pulse = Math.sin(this.riverUvOffset * 3) * 0.15 + 0.4;
+      // 发光强度脉动 - 更剧烈的变化
+      const pulse = Math.sin(this.riverUvOffset * 3) * 0.25 + 0.5; // 增大振幅
       this.riverMaterial.emissiveIntensity = pulse;
 
-      // 颜色微妙变化
-      const colorShift = Math.sin(this.riverUvOffset * 2) * 0.05;
+      // 颜色微妙变化 - 增强色彩动感
+      const colorShift = Math.sin(this.riverUvOffset * 2) * 0.08; // 增大变化幅度
       const baseColor = 0x1e88e5;
       const r = ((baseColor >> 16) & 0xff) / 255;
       const g = ((baseColor >> 8) & 0xff) / 255;
       const b = (baseColor & 0xff) / 255;
       this.riverMaterial.color.setRGB(
         r + colorShift,
-        g + colorShift * 0.5,
-        b - colorShift * 0.5
+        g + colorShift * 0.6,
+        b - colorShift * 0.6
       );
     }
 
