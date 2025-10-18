@@ -134,31 +134,29 @@ export const ModeInfoCard = ({ mode }: ModeInfoCardProps) => {
   const info = modeInfo[mode] || modeInfo.classic;
 
   return (
-    <div className="rounded-lg border border-border-default bg-surface-overlay p-4 shadow-sm">
-      <h3 className="mb-2 text-sm font-semibold text-text-primary">
+    <div className="flex w-full min-h-0 flex-col overflow-hidden rounded-lg border border-border-default bg-surface-overlay p-3 shadow-sm">
+      <h3 className="mb-1 text-xs font-semibold text-text-primary">
         {timelineModeFactory.getModeDisplayName(mode)}
       </h3>
-      <p className="mb-3 text-xs text-text-muted">{info.description}</p>
+      <p className="mb-1.5 line-clamp-2 text-xs text-text-muted">{info.description}</p>
 
-      <div className="mb-3">
-        <h4 className="mb-1 text-xs font-medium text-text-secondary">特性</h4>
-        <ul className="space-y-1">
+      <div className="min-h-0 flex-1 overflow-hidden text-xs">
+        <h4 className="mb-0.5 font-medium text-text-secondary">特性</h4>
+        <ul className="mb-1.5 space-y-0.5">
           {info.features.map((feature, index) => (
-            <li key={index} className="flex items-start gap-2 text-xs text-text-muted">
-              <span className="mt-0.5 text-accent-base">•</span>
-              <span>{feature}</span>
+            <li key={index} className="flex items-start gap-1 text-text-muted">
+              <span className="mt-0.5 shrink-0 text-accent-base">•</span>
+              <span className="line-clamp-1">{feature}</span>
             </li>
           ))}
         </ul>
-      </div>
 
-      <div>
-        <h4 className="mb-1 text-xs font-medium text-text-secondary">操作</h4>
-        <ul className="space-y-1">
+        <h4 className="mb-0.5 font-medium text-text-secondary">操作</h4>
+        <ul className="space-y-0.5">
           {info.controls.map((control, index) => (
-            <li key={index} className="flex items-start gap-2 text-xs text-text-muted">
-              <span className="mt-0.5 text-accent-base">→</span>
-              <span>{control}</span>
+            <li key={index} className="flex items-start gap-1 text-text-muted">
+              <span className="mt-0.5 shrink-0 text-accent-base">→</span>
+              <span className="line-clamp-1">{control}</span>
             </li>
           ))}
         </ul>

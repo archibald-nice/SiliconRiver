@@ -14,7 +14,6 @@ type Timeline3DProps = {
   mode?: string; // 模式名称，默认 "classic"
 };
 
-const CANVAS_HEIGHT = 520;
 const focusAnchor = getDefaultFocusAnchor();
 const defaultCameraPosition = getDefaultCameraPosition();
 
@@ -132,7 +131,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     container.innerHTML = "";
 
     const width = container.clientWidth;
-    const height = CANVAS_HEIGHT;
+    const height = container.clientHeight;
 
     // ==================== 创建 DOM UI 元素 ====================
 
@@ -364,7 +363,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
           focusPrimaryBubble.innerHTML = `
             <div class="inline-flex flex-col items-stretch gap-3">
-              <div class="w-full rounded-lg bg-slate-100 p-3">
+              <div class="w-full rounded-lg bg-bubble-core p-3">
                 <div class="flex items-start gap-3">
                   ${avatarMarkup}
                   <div class="min-w-0 flex-1">
@@ -763,7 +762,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     };
   }, [models, mode]);
 
-  return <div ref={containerRef} className="relative w-full" style={{ minHeight: CANVAS_HEIGHT }} />;
+  return <div ref={containerRef} className="relative h-full w-full" />;
 };
 
 export default Timeline3D;

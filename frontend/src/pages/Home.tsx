@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { buildProviderAvatarUrl, fetchStats, fetchTimeline, type ProviderStat, type TimelineResponse } from "../api/client";
 import Timeline3D from "../components/Timeline3D";
 import TimelineFilters, { TimelinePresetRange } from "../components/TimelineFilters";
-import { ModeSwitcher, ModeInfoCard, type TimelineModeName } from "../components/ModeSwitcher";
+import { ModeSwitcher, type TimelineModeName } from "../components/ModeSwitcher";
 
 const TIMELINE_PAGE_SIZE = 200;
 const prefetchedAvatars = new Set<string>();
@@ -17,7 +17,7 @@ const Home = () => {
   const [timelineSearchInput, setTimelineSearchInput] = useState("");
   const [timelineSearchFilter, setTimelineSearchFilter] = useState("");
   const [timelineOpenSource, setTimelineOpenSource] = useState<"all" | "open" | "closed">("all");
-  const [timelineMode, setTimelineMode] = useState<TimelineModeName>("classic");
+  const [timelineMode, setTimelineMode] = useState<TimelineModeName>("helix");
 
   const { data: providerStats } = useQuery<ProviderStat[]>({
     queryKey: ["provider-stats"],
@@ -91,10 +91,10 @@ const Home = () => {
   const canGoNextTimeline = currentTimelinePage < timelineTotalPages;
 
   return (
-    <div className="mx-auto grid w-full max-w-[1920px] gap-6 px-4 sm:px-6 lg:px-8 xl:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] xl:gap-10">
-      <section className="flex flex-col gap-6">
-        <div className="rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors">
-          <header className="border-b border-border-default px-6 py-4">
+    <div className="flex w-full min-h-0 flex-1 gap-6 xl:gap-10">
+      <section className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors">
+          <header className="shrink-0 border-b border-border-default px-6 py-4">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h1 className="text-xl font-semibold text-text-primary">Timeline</h1>
@@ -107,13 +107,13 @@ const Home = () => {
               />
             </div>
           </header>
-          <div className="p-6">
+          <div className="min-h-0 flex-1 overflow-hidden p-4">
             {isTimelineLoading ? (
               <p className="text-center text-sm text-text-muted">Loading timeline...</p>
             ) : timelineItems.length === 0 ? (
               <p className="text-center text-sm text-text-muted">No models available in this range.</p>
             ) : (
-              <div className="w-full xl:px-2">
+              <div className="h-full w-full">
                 <Timeline3D models={timelineItems} mode={timelineMode} />
               </div>
             )}
@@ -121,75 +121,74 @@ const Home = () => {
         </div>
       </section>
 
-      <aside className="flex flex-col gap-4">
-        {/* 模式信息卡片 */}
-        <ModeInfoCard mode={timelineMode} />
-
-        <section className="rounded-2xl border border-border-default bg-surface-raised p-5 shadow-lg shadow-accent transition-colors">
-          <header className="mb-4 space-y-1">
+      <aside className="flex w-full min-w-0 flex-col xl:w-auto xl:flex-none" style={{ maxWidth: "380px" }}>
+        <section className="flex min-h-0 flex-1 w-full flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors">
+          <header className="shrink-0 mb-2 space-y-1 px-4 pt-3">
             <h2 className="text-sm font-semibold text-text-primary">{"\u6a21\u578b\u68c0\u7d22"}</h2>
             <p className="text-xs text-text-muted">{"\u6309\u65f6\u95f4\u3001\u53d1\u5e03\u516c\u53f8\u6216\u540d\u79f0\u5feb\u901f\u5b9a\u4f4d\u6a21\u578b\u8282\u70b9\u3002"}</p>
           </header>
-          <TimelineFilters
-            activeRange={timelineRange}
-            customYear={timelineYear}
-            providers={providerOptions}
-            selectedProvider={timelineProvider}
-            onProviderChange={(value) => {
-              setTimelineProvider(value);
-              setTimelinePage(1);
-            }}
-            modelQuery={timelineSearchInput}
-            onModelQueryChange={setTimelineSearchInput}
-            onModelQuerySubmit={() => {
-              const trimmed = timelineSearchInput.trim();
-              setTimelineSearchFilter(trimmed);
-              setTimelinePage(1);
-              if (trimmed.length > 0) {
-                setTimelineRange("all");
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3">
+            <TimelineFilters
+              activeRange={timelineRange}
+              customYear={timelineYear}
+              providers={providerOptions}
+              selectedProvider={timelineProvider}
+              onProviderChange={(value) => {
+                setTimelineProvider(value);
+                setTimelinePage(1);
+              }}
+              modelQuery={timelineSearchInput}
+              onModelQueryChange={setTimelineSearchInput}
+              onModelQuerySubmit={() => {
+                const trimmed = timelineSearchInput.trim();
+                setTimelineSearchFilter(trimmed);
+                setTimelinePage(1);
+                if (trimmed.length > 0) {
+                  setTimelineRange("all");
+                  setTimelineYear(null);
+                }
+              }}
+              onModelQueryClear={() => {
+                setTimelineSearchFilter("");
+                setTimelineSearchInput("");
+                setTimelinePage(1);
+                if (timelineRange === "all") {
+                  setTimelineRange("30d");
+                  setTimelineYear(null);
+                }
+              }}
+              onPresetChange={(range) => {
+                setTimelineRange(range);
                 setTimelineYear(null);
-              }
-            }}
-            onModelQueryClear={() => {
-              setTimelineSearchFilter("");
-              setTimelineSearchInput("");
-              setTimelinePage(1);
-              if (timelineRange === "all") {
-                setTimelineRange("30d");
-                setTimelineYear(null);
-              }
-            }}
-            onPresetChange={(range) => {
-              setTimelineRange(range);
-              setTimelineYear(null);
-              setTimelinePage(1);
-            }}
-            onCustomYearChange={(year) => {
-              setTimelineYear(year);
-              if (year !== null) {
-                setTimelineRange("1y");
-              } else {
-                setTimelineRange("30d");
-              }
-              setTimelinePage(1);
-            }}
-            openSourceFilter={timelineOpenSource}
-            onOpenSourceChange={(value) => {
-              setTimelineOpenSource(value);
-              setTimelinePage(1);
-            }}
-          />
-          {timelineData && (
-            <div className="mt-4 border-t border-border-default pt-4 text-xs text-text-muted">
-              <p>
-                {`💠 总计：`}
-                <span className="font-semibold text-text-primary">
-                  {timelineTotal.toLocaleString()}
-                </span>
-                {` 个模型节点`}
-              </p>
-            </div>
-          )}
+                setTimelinePage(1);
+              }}
+              onCustomYearChange={(year) => {
+                setTimelineYear(year);
+                if (year !== null) {
+                  setTimelineRange("1y");
+                } else {
+                  setTimelineRange("30d");
+                }
+                setTimelinePage(1);
+              }}
+              openSourceFilter={timelineOpenSource}
+              onOpenSourceChange={(value) => {
+                setTimelineOpenSource(value);
+                setTimelinePage(1);
+              }}
+            />
+            {timelineData && (
+              <div className="mt-2 border-t border-border-default pt-2 text-xs text-text-muted">
+                <p>
+                  {`💠 总计：`}
+                  <span className="font-semibold text-text-primary">
+                    {timelineTotal.toLocaleString()}
+                  </span>
+                  {` 个模型节点`}
+                </p>
+              </div>
+            )}
+          </div>
         </section>
       </aside>
     </div>
