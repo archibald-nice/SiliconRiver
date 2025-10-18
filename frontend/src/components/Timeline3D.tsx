@@ -213,16 +213,16 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     nearestButton.style.zIndex = "20";
     container.appendChild(nearestButton);
 
-    // Famous 快捷按钮
-    const famousButton = document.createElement("button");
-    famousButton.className =
+    // Fathest 快捷按钮
+    const fathestButton = document.createElement("button");
+    fathestButton.className =
       "absolute right-3 z-20 rounded-md border border-amber-700 bg-amber-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-amber-800";
-    famousButton.textContent = "Famous";
-    famousButton.style.position = "absolute";
-    famousButton.style.right = "12px";
-    famousButton.style.top = "52px";
-    famousButton.style.zIndex = "20";
-    container.appendChild(famousButton);
+    fathestButton.textContent = "Fathest";
+    fathestButton.style.position = "absolute";
+    fathestButton.style.right = "12px";
+    fathestButton.style.top = "52px";
+    fathestButton.style.zIndex = "20";
+    container.appendChild(fathestButton);
 
     // SVG 引导线
     const leaderSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -694,8 +694,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
         };
         nearestButton.addEventListener("click", handleNearest);
 
-        // Famous 按钮点击事件处理 - 根据排名查找最著名的节点
-        const findFamousNode = (): number => {
+        // Fathest 按钮点击事件处理 - 根据排名查找最著名的节点
+        const findFathestNode = (): number => {
           let bestIndex = 0;
           let bestRank = Infinity;
 
@@ -710,14 +710,14 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           return bestIndex;
         };
 
-        const handleFamous = () => {
-          const famousIndex = findFamousNode();
-          if (famousIndex >= 0) {
-            lastFocusDirection = famousIndex > currentFocusIndex ? 1 : -1;
-            modeInstance.setFocus(famousIndex);
+        const handleFathest = () => {
+          const fathestIndex = findFathestNode();
+          if (fathestIndex >= 0) {
+            lastFocusDirection = fathestIndex > currentFocusIndex ? 1 : -1;
+            modeInstance.setFocus(fathestIndex);
           }
         };
-        famousButton.addEventListener("click", handleFamous);
+        fathestButton.addEventListener("click", handleFathest);
 
         const handleResize = () => {
           const newWidth = container.clientWidth;
@@ -892,7 +892,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           renderer.domElement.removeEventListener("pointerup", handlePointerUp);
           renderer.domElement.removeEventListener("wheel", handleWheel);
           nearestButton.removeEventListener("click", handleNearest);
-          famousButton.removeEventListener("click", handleFamous);
+          fathestButton.removeEventListener("click", handleFathest);
 
           tooltip.remove();
           focusPrimaryBubble.remove();
@@ -902,7 +902,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           prevHintLabel.remove();
           priceTooltip.remove();
           nearestButton.remove();
-          famousButton.remove();
+          fathestButton.remove();
           leaderSvg.remove();
 
           markerGeometry.dispose();

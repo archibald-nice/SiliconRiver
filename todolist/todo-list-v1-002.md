@@ -53,8 +53,8 @@
 - [x] 三个模式都改动部分：
   - [x] 在3D时间线画布的右上角设置"Nearest"方形Tag，边框很细有轻微圆角，底纹深蓝色，文字白色，当用户点击时聚焦到当前结果中最新的那个节点上
     - **实现**: Timeline3D.tsx 中添加 Nearest 按钮 + handleNearest() 事件
-  - [x] 在3D时间线画布的右上角设置"Famous"方形Tag，边框很细有轻微圆角，底纹深蓝色，文字白色，当用户点击时聚焦到排名最高的节点上
-    - **实现**: Timeline3D.tsx 中添加 Famous 按钮 + findFamousNode() + handleFamous() 事件
+  - [x] 在3D时间线画布的右上角设置"Fathest"方形Tag，边框很细有轻微圆角，底纹深蓝色，文字白色，当用户点击时聚焦到排名最高的节点上
+    - **实现**: Timeline3D.tsx 中添加 Fathest 按钮 + findFathestNode() + handleFathest() 事件
   - [x] 现在三个模式的画布底色都是自行管理的，我要让他们适配网站的主体颜色切换：
     - [x] "星轨螺旋" 在浅色主题下，背景换成同色系更淡的颜色 从而适配全局白色的底色；
       - **实现**: 浅色主题 0xd6e4f5 (淡天蓝)
