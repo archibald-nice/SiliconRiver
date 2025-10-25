@@ -39,7 +39,7 @@ class Model(BaseModel):
     model_name: str
     description: Optional[str]
     tags: List[str]
-    created_at: str
+    created_at: datetime
     downloads: Optional[int]
     likes: Optional[int]
     model_card_url: str
@@ -62,7 +62,7 @@ class TimelineModel(BaseModel):
     provider: str
     model_name: str
     description: Optional[str]
-    created_at: str
+    created_at: datetime
     model_card_url: str
     tags: List[str]
     avatar_url: Optional[str] = None
@@ -77,8 +77,8 @@ class TimelineResponse(BaseModel):
     total: int
     page: int
     page_size: int
-    start: str
-    end: str
+    start: datetime
+    end: datetime
     preset: str
     label: str
 
@@ -199,9 +199,7 @@ async def timeline_models(
     open_source: Optional[bool] = Query(None),
     conn: psycopg.Connection = Depends(get_db),
 ):
-    start_dt, end_dt, label = _calculate_timeline_window(preset=preset, year=year)
-    start = start_dt.isoformat()
-    end = end_dt.isoformat()
+    start, end, label = _calculate_timeline_window(preset=preset, year=year)
     order_clause = "ASC" if sort == "asc" else "DESC"
     offset = (page - 1) * page_size
     filters: List[str] = []
