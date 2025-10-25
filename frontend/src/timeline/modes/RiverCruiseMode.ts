@@ -322,7 +322,7 @@ export class RiverCruiseMode extends BaseTimelineMode {
       if (this.riverEdgeMesh && this.timelineGroup) {
         this.timelineGroup.remove(this.riverEdgeMesh);
         this.riverEdgeMesh.geometry.dispose();
-        (this.riverEdgeMesh.material as THREE.ShaderMaterial).dispose();
+        this.riverEdgeMesh.material.dispose();
         this.riverEdgeMesh = null;
       }
 

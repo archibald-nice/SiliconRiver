@@ -310,7 +310,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
         if (this.timelineGroup) {
           this.timelineGroup.remove(anchor.mesh);
         }
-        (anchor.mesh.material as THREE.Material).dispose();
+        anchor.mesh.material.dispose();
       });
       this.yearAnchors = [];
       this.yearAnchorGeometry?.dispose();
@@ -323,7 +323,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
         if (this.timelineGroup) {
           this.timelineGroup.remove(anchor.mesh);
         }
-        (anchor.mesh.material as THREE.Material).dispose();
+        anchor.mesh.material.dispose();
       });
       this.quarterAnchors = [];
       this.quarterAnchorGeometry?.dispose();
@@ -336,7 +336,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
         if (this.timelineGroup) {
           this.timelineGroup.remove(anchor.mesh);
         }
-        (anchor.mesh.material as THREE.Material).dispose();
+        anchor.mesh.material.dispose();
       });
       this.monthAnchors = [];
       this.monthAnchorGeometry?.dispose();
@@ -408,7 +408,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
    * 处理年份锚点点击
    * @returns 该年份后的第一个模型索引
    */
-  private handleYearAnchorClick(mesh: THREE.Mesh): number | null {
+  private handleYearAnchorClick(mesh: any): number | null {
     const year = mesh.userData.year as number;
     const yearTimestamp = mesh.userData.timestamp as number;
 
@@ -433,7 +433,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
   /**
    * 处理季度锚点点击
    */
-  private handleQuarterAnchorClick(mesh: THREE.Mesh): number | null {
+  private handleQuarterAnchorClick(mesh: any): number | null {
     const year = mesh.userData.year as number;
     const quarter = mesh.userData.quarter as number;
     const quarterTimestamp = mesh.userData.timestamp as number;
@@ -458,7 +458,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
   /**
    * 处理月份锚点点击
    */
-  private handleMonthAnchorClick(mesh: THREE.Mesh): number | null {
+  private handleMonthAnchorClick(mesh: any): number | null {
     const year = mesh.userData.year as number;
     const month = mesh.userData.month as number;
     const monthTimestamp = mesh.userData.timestamp as number;
@@ -580,7 +580,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
       if (this.timelineGroup) {
         this.timelineGroup.remove(anchor.mesh);
       }
-      (anchor.mesh.material as THREE.Material).dispose();
+      anchor.mesh.material.dispose();
     });
     this.yearAnchors = [];
 
@@ -664,7 +664,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
       if (this.timelineGroup) {
         this.timelineGroup.remove(anchor.mesh);
       }
-      (anchor.mesh.material as THREE.Material).dispose();
+      anchor.mesh.material.dispose();
     });
     this.quarterAnchors = [];
 
@@ -747,7 +747,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
       if (this.timelineGroup) {
         this.timelineGroup.remove(anchor.mesh);
       }
-      (anchor.mesh.material as THREE.Material).dispose();
+      anchor.mesh.material.dispose();
     });
     this.monthAnchors = [];
 
@@ -1150,7 +1150,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
     const time = Date.now() * 0.001; // 转换为秒
 
     this.yearAnchors.forEach((anchor) => {
-      const material = anchor.mesh.material as THREE.MeshStandardMaterial;
+      const material = anchor.mesh.material as any;
 
       // 透明度闪烁（0.4 - 1.0 之间）
       const opacityPulse = 0.7 + Math.sin(time * 3.0) * 0.3;
@@ -1173,7 +1173,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
     const time = Date.now() * 0.001;
 
     this.quarterAnchors.forEach((anchor) => {
-      const material = anchor.mesh.material as THREE.MeshStandardMaterial;
+      const material = anchor.mesh.material as any;
 
       // 透明度闪烁（略小于年份锚点）
       const opacityPulse = 0.6 + Math.sin(time * 2.5) * 0.3;
@@ -1196,7 +1196,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
     const time = Date.now() * 0.001;
 
     this.monthAnchors.forEach((anchor) => {
-      const material = anchor.mesh.material as THREE.MeshStandardMaterial;
+      const material = anchor.mesh.material as any;
 
       // 透明度闪烁（最小的脉动）
       const opacityPulse = 0.5 + Math.sin(time * 2.0) * 0.25;
