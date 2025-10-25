@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS models (
     model_name TEXT NOT NULL,
     description TEXT,
     tags TEXT,
-    created_at TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
     downloads BIGINT,
     likes BIGINT,
     model_card_url TEXT NOT NULL,
