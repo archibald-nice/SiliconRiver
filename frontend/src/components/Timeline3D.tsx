@@ -183,8 +183,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
       return hint;
     };
 
-    const nextHintLabel = createHint("Next...");
-    const prevHintLabel = createHint("Prev...");
+    const prevHintLabel = createHint("Next...");
+    const nextHintLabel = createHint("Prev...");
     container.appendChild(nextHintLabel);
     container.appendChild(prevHintLabel);
 
