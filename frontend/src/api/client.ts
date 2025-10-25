@@ -1,15 +1,24 @@
 import axios from "axios";
 
-const baseURL = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+// 当 VITE_API_BASE 为空时，使用相对路径（反向代理模式）
+// 当 VITE_API_BASE 有值时，使用绝对 URL（直接访问模式）
+const baseURL = import.meta.env.VITE_API_BASE || "";
 
 export const API_BASE_URL = baseURL;
 
 export const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: baseURL || "/",  // 空字符串时默认为相对路径
 });
 
-export const buildProviderAvatarUrl = (provider: string) =>
-  new URL(`/api/providers/${encodeURIComponent(provider)}/avatar`, API_BASE_URL).toString();
+export const buildProviderAvatarUrl = (provider: string) => {
+  const path = `/api/providers/${encodeURIComponent(provider)}/avatar`;
+  // 如果 API_BASE_URL 为空，直接返回相对路径（反向代理模式）
+  if (!API_BASE_URL) {
+    return path;
+  }
+  // 否则拼接绝对 URL
+  return new URL(path, API_BASE_URL).toString();
+};
 
 /** @deprecated 归档：模型列表视图已下线，接口保留以兼容历史用例。 */
 export interface ModelSummary {
