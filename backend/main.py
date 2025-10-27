@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from psycopg.rows import dict_row
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 ENV_PATH = BASE_DIR / ".env"
@@ -34,6 +34,8 @@ def get_connection() -> psycopg.Connection:
 
 
 class Model(BaseModel):
+    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
+
     model_id: str
     provider: str
     model_name: str
@@ -53,11 +55,15 @@ class ModelList(BaseModel):
 
 
 class ProviderStat(BaseModel):
+    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
+
     provider: str
     model_count: int
 
 
 class TimelineModel(BaseModel):
+    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
+
     model_id: str
     provider: str
     model_name: str
@@ -73,6 +79,8 @@ class TimelineModel(BaseModel):
 
 
 class TimelineResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
+
     items: List[TimelineModel]
     total: int
     page: int
