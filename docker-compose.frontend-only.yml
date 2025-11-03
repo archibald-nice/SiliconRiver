@@ -1,0 +1,64 @@
+version: '3.8'
+
+# ===================================================
+# Silicon River 前端独立部署配置
+# 适用场景：后端和数据库已在其他服务器部署
+# ===================================================
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # 从环境变量读取后端 API 地址
+        # 在 1Panel 中配置或通过 .env 文件设置
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+
+    container_name: silicon-river-frontend
+
+    ports:
+      - "80:80"
+
+    restart: unless-stopped
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+    # 资源限制（根据服务器配置调整）
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ===================================================
+# 使用说明
+# ===================================================
+# 1. 创建 .env 文件并设置后端地址：
+#    echo "VITE_API_BASE=https://api.your-backend.com" > .env
+#
+# 2. 启动容器：
+#    docker-compose -f docker-compose.frontend-only.yml up -d
+#
+# 3. 查看日志：
+#    docker-compose -f docker-compose.frontend-only.yml logs -f
+#
+# 4. 停止容器：
+#    docker-compose -f docker-compose.frontend-only.yml down
+# ===================================================
