@@ -13,12 +13,15 @@ services:
       args:
         # 从环境变量读取后端 API 地址
         # 在 1Panel 中配置或通过 .env 文件设置
-        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+        VITE_API_BASE: ${VITE_API_BASE:-https://api.siliconriver.top}
 
     container_name: silicon-river-frontend
 
     ports:
-      - "80:80"
+      # 注意：不要直接暴露 80 端口，改为高端口
+      # 由 1Panel 的 OpenResty 反向代理到这个端口
+      # 如果 8080 被占用，可以改为 8081、9000 等
+      - "8081:80"
 
     restart: unless-stopped
 
