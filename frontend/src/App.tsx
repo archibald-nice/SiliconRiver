@@ -1,4 +1,4 @@
-﻿import { MoonIcon, SunIcon } from "@heroicons/react/24/outline";
+﻿import { MoonIcon, SunIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 
 import Footer from "./components/Footer";
 import Home from "./pages/Home";
@@ -20,15 +20,27 @@ const App = () => {
               <p className="text-xs text-text-muted">大模型发布一站式观察台</p>
             </div>
           </div>
-          <button
-            type="button"
-            aria-label="切换主题"
-            onClick={toggleTheme}
-            className="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-border-default bg-surface-raised px-3 py-1.5 text-xs font-medium text-text-secondary shadow-sm transition-colors hover:border-accent-base hover:text-text-primary"
-          >
-            {isDark ? <SunIcon className="h-4 w-4" /> : <MoonIcon className="h-4 w-4" />}
-            <span className="hidden sm:inline">{isDark ? "浅色" : "深色"}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href="https://github.com/archibald-nice/SiliconRiver"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-border-default bg-surface-raised px-3 py-1.5 text-xs font-medium text-text-secondary shadow-sm transition-colors hover:border-accent-base hover:text-text-primary"
+              aria-label="GitHub项目链接"
+            >
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">GitHub</span>
+            </a>
+            <button
+              type="button"
+              aria-label="切换主题"
+              onClick={toggleTheme}
+              className="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-border-default bg-surface-raised px-3 py-1.5 text-xs font-medium text-text-secondary shadow-sm transition-colors hover:border-accent-base hover:text-text-primary"
+            >
+              {isDark ? <SunIcon className="h-4 w-4" /> : <MoonIcon className="h-4 w-4" />}
+              <span className="hidden sm:inline">{isDark ? "浅色" : "深色"}</span>
+            </button>
+          </div>
         </div>
       </header>
       <main className="flex min-w-0 flex-1 overflow-hidden px-6 py-3">

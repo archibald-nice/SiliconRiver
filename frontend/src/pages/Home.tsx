@@ -93,12 +93,12 @@ const Home = () => {
   return (
     <div className="flex w-full min-h-0 flex-1 gap-6 xl:gap-10">
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors">
-          <header className="shrink-0 border-b border-border-default px-6 py-4">
+        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors ring-1 ring-blue-200/50 ring-inset">
+          <header className="shrink-0 border-b border-border-default px-6 py-2">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h1 className="text-xl font-semibold text-text-primary">Timeline</h1>
-                <p className="mt-1 text-sm text-text-muted">滚动或调整右侧筛选器，浏览最新模型节点。</p>
+                <p className="mt-1 text-sm text-accent-base">滚动或调整右侧筛选器，浏览最新模型节点。</p>
               </div>
               <ModeSwitcher
                 currentMode={timelineMode}
