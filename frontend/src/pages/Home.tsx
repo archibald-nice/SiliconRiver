@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { buildProviderAvatarUrl, fetchStats, fetchTimeline, type ProviderStat, type TimelineResponse } from "../api/client";
 import Timeline3D from "../components/Timeline3D";
 import TimelineFilters, { TimelinePresetRange } from "../components/TimelineFilters";
+import MobileFilterButton from "../components/MobileFilterButton";
+import MobileFilterDrawer from "../components/MobileFilterDrawer";
 import { ModeSwitcher, type TimelineModeName } from "../components/ModeSwitcher";
 
 const TIMELINE_PAGE_SIZE = 200;
@@ -18,6 +20,7 @@ const Home = () => {
   const [timelineSearchFilter, setTimelineSearchFilter] = useState("");
   const [timelineOpenSource, setTimelineOpenSource] = useState<"all" | "open" | "closed">("all");
   const [timelineMode, setTimelineMode] = useState<TimelineModeName>("helix");
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   const { data: providerStats } = useQuery<ProviderStat[]>({
     queryKey: ["provider-stats"],
@@ -91,7 +94,63 @@ const Home = () => {
   const canGoNextTimeline = currentTimelinePage < timelineTotalPages;
 
   return (
-    <div className="flex w-full min-h-0 flex-1 gap-6 xl:gap-10">
+    <div className="flex w-full min-h-0 flex-1 gap-6 xl:gap-10 relative">
+      {/* 移动端悬浮菜单按钮 */}
+      <MobileFilterButton isOpen={isDrawerOpen} onToggle={setIsDrawerOpen} />
+
+      {/* 移动端抽屉 */}
+      <MobileFilterDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        activeRange={timelineRange}
+        customYear={timelineYear}
+        providers={providerOptions}
+        selectedProvider={timelineProvider}
+        onProviderChange={(value: string | null) => {
+          setTimelineProvider(value);
+          setTimelinePage(1);
+        }}
+        modelQuery={timelineSearchInput}
+        onModelQueryChange={setTimelineSearchInput}
+        onModelQuerySubmit={() => {
+          const trimmed = timelineSearchInput.trim();
+          setTimelineSearchFilter(trimmed);
+          setTimelinePage(1);
+          if (trimmed.length > 0) {
+            setTimelineRange("all");
+            setTimelineYear(null);
+          }
+        }}
+        onModelQueryClear={() => {
+          setTimelineSearchFilter("");
+          setTimelineSearchInput("");
+          setTimelinePage(1);
+          if (timelineRange === "all") {
+            setTimelineRange("30d");
+            setTimelineYear(null);
+          }
+        }}
+        onPresetChange={(range: TimelinePresetRange) => {
+          setTimelineRange(range);
+          setTimelineYear(null);
+          setTimelinePage(1);
+        }}
+        onCustomYearChange={(year: number | null) => {
+          setTimelineYear(year);
+          if (year !== null) {
+            setTimelineRange("1y");
+          } else {
+            setTimelineRange("30d");
+          }
+          setTimelinePage(1);
+        }}
+        openSourceFilter={timelineOpenSource}
+        onOpenSourceChange={(value: "all" | "open" | "closed") => {
+          setTimelineOpenSource(value);
+          setTimelinePage(1);
+        }}
+      />
+
       <section className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors ring-1 ring-blue-200/50 ring-inset">
           <header className="shrink-0 border-b border-border-default px-6 py-2">
@@ -121,7 +180,7 @@ const Home = () => {
         </div>
       </section>
 
-      <aside className="flex w-full min-w-0 flex-col xl:w-auto xl:flex-none" style={{ maxWidth: "380px" }}>
+      <aside className="hidden md:flex md:w-full md:min-w-0 md:flex-col md:xl:w-auto md:xl:flex-none" style={{ maxWidth: "380px" }}>
         <section className="flex min-h-0 flex-1 w-full flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors">
           <header className="shrink-0 mb-2 space-y-1 px-4 pt-3">
             <h2 className="text-sm font-semibold text-text-primary">{"\u6a21\u578b\u68c0\u7d22"}</h2>

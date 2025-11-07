@@ -1,8 +1,8 @@
-import { FormEvent, KeyboardEvent, useId } from "react";
+import { FormEvent, KeyboardEvent, useId, useState, useEffect } from "react";
 
 export type TimelinePresetRange = "all" | "30d" | "6m" | "1y";
 
-type TimelineFiltersProps = {
+export type TimelineFiltersProps = {
   activeRange: TimelinePresetRange;
   customYear?: number | null;
   providers: string[];
@@ -31,7 +31,7 @@ const OPEN_SOURCE_OPTIONS: { label: string; value: "all" | "open" | "closed"; de
   { label: "闭源", value: "closed", description: "仅查看闭源模型" },
 ];
 
-const TimelineFilters = ({
+const FilterContent = ({
   activeRange,
   customYear,
   providers,
@@ -45,11 +45,14 @@ const TimelineFilters = ({
   onOpenSourceChange,
   onPresetChange,
   onCustomYearChange,
-}: TimelineFiltersProps) => {
-  const inputId = useId();
-  const providerSelectId = useId();
-  const modelSearchId = useId();
-
+  inputId,
+  providerSelectId,
+  modelSearchId,
+}: TimelineFiltersProps & {
+  inputId: string;
+  providerSelectId: string;
+  modelSearchId: string;
+}) => {
   const handleCustomSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
@@ -72,56 +75,63 @@ const TimelineFilters = ({
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-border-default bg-surface-raised p-4 text-sm text-text-secondary transition-colors">
-      <p className="text-xs font-semibold text-text-secondary">时间范围</p>
-      <div className="flex flex-wrap gap-2">
-        {PRESET_OPTIONS.map((preset) => (
-          <span
-            key={preset.value}
-            role="button"
-            tabIndex={0}
-            onClick={() => onPresetChange(preset.value)}
-            onKeyDown={(event) => handleTagKeyPress(event, () => onPresetChange(preset.value))}
-            className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium transition cursor-pointer select-none ${
-              activeRange === preset.value
-                ? "border-accent-base bg-accent-base/10 text-accent-base shadow-sm"
-                : "border-border-default bg-surface-overlay text-text-secondary hover:border-accent-base hover:bg-surface-raised hover:text-text-primary"
-            }`}
-            title={preset.description}
-          >
-            {preset.label}
-          </span>
-        ))}
+    <div className="space-y-4">
+      <div>
+        <p className="text-xs font-semibold text-text-secondary mb-2">时间范围</p>
+        <div className="flex flex-wrap gap-2">
+          {PRESET_OPTIONS.map((preset) => (
+            <span
+              key={preset.value}
+              role="button"
+              tabIndex={0}
+              onClick={() => onPresetChange(preset.value)}
+              onKeyDown={(event) => handleTagKeyPress(event, () => onPresetChange(preset.value))}
+              className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition cursor-pointer select-none touch-manipulation ${
+                activeRange === preset.value
+                  ? "border-accent-base bg-accent-base/10 text-accent-base shadow-sm"
+                  : "border-border-default bg-surface-overlay text-text-secondary hover:border-accent-base hover:bg-surface-raised hover:text-text-primary"
+              }`}
+              title={preset.description}
+            >
+              {preset.label}
+            </span>
+          ))}
+        </div>
       </div>
-      <p className="text-xs text-text-muted">或请选择具体年份：</p>
-      <form className="flex items-center gap-3" onSubmit={handleCustomSubmit}>
-        <input
-          id={inputId}
-          name="year"
-          type="number"
-          placeholder="例如 2024"
-          defaultValue={customYear ?? ""}
-          className="w-28 rounded-md border border-border-default bg-surface-input px-3 py-1 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
-        />
-        <button
-          type="submit"
-          className="rounded-md border border-border-default px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary"
-        >
-          确定
-        </button>
-        {customYear ? (
-          <button
-            type="button"
-            onClick={() => onCustomYearChange(null)}
-            className="text-xs text-text-muted hover:text-text-primary"
-          >
-            清除年份
-          </button>
-        ) : null}
-      </form>
+
+      <div>
+        <p className="text-xs text-text-muted mb-2">或请选择具体年份：</p>
+        <form className="flex flex-col gap-2 sm:flex-row sm:items-center" onSubmit={handleCustomSubmit}>
+          <input
+            id={inputId}
+            name="year"
+            type="number"
+            placeholder="例如 2024"
+            defaultValue={customYear ?? ""}
+            className="flex-1 rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
+          />
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="rounded-md border border-border-default px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary touch-manipulation"
+            >
+              确定
+            </button>
+            {customYear ? (
+              <button
+                type="button"
+                onClick={() => onCustomYearChange(null)}
+                className="text-xs text-text-muted hover:text-text-primary"
+              >
+                清除
+              </button>
+            ) : null}
+          </div>
+        </form>
+      </div>
 
       {providers.length > 0 ? (
-        <div className="space-y-2 border-t border-border-default pt-2">
+        <div className="space-y-2 border-t border-border-default pt-4">
           <label
             htmlFor={providerSelectId}
             className="block text-xs font-semibold uppercase tracking-wide text-text-muted"
@@ -132,7 +142,7 @@ const TimelineFilters = ({
             id={providerSelectId}
             value={selectedProvider ?? ""}
             onChange={(event) => onProviderChange(event.target.value === "" ? null : event.target.value)}
-            className="w-full rounded-md border border-border-default bg-surface-input px-3 py-1 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
+            className="w-full rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none touch-manipulation"
           >
             <option value="">全部厂商</option>
             {providers.map((provider) => (
@@ -153,7 +163,7 @@ const TimelineFilters = ({
         </div>
       ) : null}
 
-      <div className="space-y-2 border-t border-border-default pt-2">
+      <div className="space-y-2 border-t border-border-default pt-4">
         <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">模型授权</p>
         <div className="flex flex-wrap gap-2">
           {OPEN_SOURCE_OPTIONS.map((option) => (
@@ -163,7 +173,7 @@ const TimelineFilters = ({
               tabIndex={0}
               onClick={() => onOpenSourceChange(option.value)}
               onKeyDown={(event) => handleTagKeyPress(event, () => onOpenSourceChange(option.value))}
-              className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium transition cursor-pointer select-none ${
+              className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition cursor-pointer select-none touch-manipulation ${
                 openSourceFilter === option.value
                   ? "border-accent-base bg-accent-base/10 text-accent-base shadow-sm"
                   : "border-border-default bg-surface-overlay text-text-secondary hover:border-accent-base hover:bg-surface-raised hover:text-text-primary"
@@ -176,7 +186,7 @@ const TimelineFilters = ({
         </div>
       </div>
 
-      <div className="space-y-2 border-t border-border-default pt-2">
+      <div className="space-y-2 border-t border-border-default pt-4">
         <label
           htmlFor={modelSearchId}
           className="block text-xs font-semibold uppercase tracking-wide text-text-muted"
@@ -184,7 +194,7 @@ const TimelineFilters = ({
           模型名称
         </label>
         <form
-          className="flex flex-col gap-2 sm:flex-row sm:items-center"
+          className="flex flex-col gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             onModelQuerySubmit();
@@ -196,12 +206,12 @@ const TimelineFilters = ({
             value={modelQuery}
             onChange={(event) => onModelQueryChange(event.target.value)}
             placeholder="例如：Llama"
-            className="flex-1 rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
+            className="w-full rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none touch-manipulation"
           />
           <div className="flex gap-2">
             <button
               type="submit"
-              className="rounded-md border border-border-default px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary"
+              className="flex-1 rounded-md border border-border-default px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary touch-manipulation"
             >
               搜索
             </button>
@@ -209,7 +219,7 @@ const TimelineFilters = ({
               <button
                 type="button"
                 onClick={onModelQueryClear}
-                className="rounded-md border border-transparent px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-primary"
+                className="flex-1 rounded-md border border-transparent px-3 py-2 text-xs text-text-muted transition-colors hover:text-text-primary touch-manipulation"
               >
                 清空
               </button>
@@ -217,6 +227,23 @@ const TimelineFilters = ({
           </div>
         </form>
       </div>
+    </div>
+  );
+};
+
+const TimelineFilters = (props: TimelineFiltersProps) => {
+  const inputId = useId();
+  const providerSelectId = useId();
+  const modelSearchId = useId();
+
+  return (
+    <div className="hidden md:flex md:flex-col gap-2 rounded-xl border border-border-default bg-surface-raised p-4 text-sm text-text-secondary transition-colors">
+      <FilterContent
+        {...props}
+        inputId={inputId}
+        providerSelectId={providerSelectId}
+        modelSearchId={modelSearchId}
+      />
     </div>
   );
 };
