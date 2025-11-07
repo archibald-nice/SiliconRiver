@@ -1,35 +1,6 @@
-import { FormEvent, KeyboardEvent, useId, useState, useEffect } from "react";
+import { KeyboardEvent, useId, useEffect } from "react";
 
-export type TimelinePresetRange = "all" | "30d" | "6m" | "1y";
-
-export type TimelineFiltersProps = {
-  activeRange: TimelinePresetRange;
-  customYear?: number | null;
-  providers: string[];
-  selectedProvider: string | null;
-  onProviderChange: (value: string | null) => void;
-  modelQuery: string;
-  onModelQueryChange: (value: string) => void;
-  onModelQuerySubmit: () => void;
-  onModelQueryClear: () => void;
-  openSourceFilter: "all" | "open" | "closed";
-  onOpenSourceChange: (value: "all" | "open" | "closed") => void;
-  onPresetChange: (range: TimelinePresetRange) => void;
-  onCustomYearChange: (year: number | null) => void;
-};
-
-const PRESET_OPTIONS: { label: string; value: TimelinePresetRange; description: string }[] = [
-  { label: "不限", value: "all", description: "显示所有时间范围的模型" },
-  { label: "近30天", value: "30d", description: "呈现最近30天新增的模型" },
-  { label: "近6个月", value: "6m", description: "呈现最近6个月新增的模型" },
-  { label: "今年", value: "1y", description: "呈现今年发布的模型" },
-];
-
-const OPEN_SOURCE_OPTIONS: { label: string; value: "all" | "open" | "closed"; description: string }[] = [
-  { label: "全部", value: "all", description: "查看全部模型" },
-  { label: "开源", value: "open", description: "仅查看开源模型" },
-  { label: "闭源", value: "closed", description: "仅查看闭源模型" },
-];
+import type { TimelineFiltersProps } from "./TimelineFilters";
 
 const FilterContent = ({
   activeRange,
@@ -53,7 +24,20 @@ const FilterContent = ({
   providerSelectId: string;
   modelSearchId: string;
 }) => {
-  const handleCustomSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const PRESET_OPTIONS: { label: string; value: "all" | "30d" | "6m" | "1y"; description: string }[] = [
+    { label: "不限", value: "all", description: "显示所有时间范围的模型" },
+    { label: "近30天", value: "30d", description: "呈现最近30天新增的模型" },
+    { label: "近6个月", value: "6m", description: "呈现最近6个月新增的模型" },
+    { label: "今年", value: "1y", description: "呈现今年发布的模型" },
+  ];
+
+  const OPEN_SOURCE_OPTIONS: { label: string; value: "all" | "open" | "closed"; description: string }[] = [
+    { label: "全部", value: "all", description: "查看全部模型" },
+    { label: "开源", value: "open", description: "仅查看开源模型" },
+    { label: "闭源", value: "closed", description: "仅查看闭源模型" },
+  ];
+
+  const handleCustomSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const yearValue = formData.get("year")?.toString();
@@ -145,7 +129,7 @@ const FilterContent = ({
             className="w-full rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none touch-manipulation"
           >
             <option value="">全部厂商</option>
-            {providers.map((provider) => (
+            {providers.map((provider: string) => (
               <option key={provider} value={provider}>
                 {provider}
               </option>
@@ -231,21 +215,82 @@ const FilterContent = ({
   );
 };
 
-const TimelineFilters = (props: TimelineFiltersProps) => {
+type MobileFilterDrawerProps = TimelineFiltersProps & {
+  isOpen: boolean;
+  onClose: () => void;
+};
+
+const MobileFilterDrawer = ({ isOpen, onClose, ...filterProps }: MobileFilterDrawerProps) => {
   const inputId = useId();
   const providerSelectId = useId();
   const modelSearchId = useId();
 
+  // 关闭抽屉
+  useEffect(() => {
+    const handleEscape = (e: Event) => {
+      const keyboardEvent = e as unknown as KeyboardEvent;
+      if (keyboardEvent.key === "Escape" && isOpen) {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      document.addEventListener("keydown", handleEscape);
+      return () => document.removeEventListener("keydown", handleEscape);
+    }
+  }, [isOpen, onClose]);
+
   return (
-    <div className="hidden md:flex md:flex-col gap-2 rounded-xl border border-border-default bg-surface-raised p-4 text-sm text-text-secondary transition-colors">
-      <FilterContent
-        {...props}
-        inputId={inputId}
-        providerSelectId={providerSelectId}
-        modelSearchId={modelSearchId}
-      />
-    </div>
+    <>
+      {/* 背景遮罩 */}
+      {isOpen && (
+        <button
+          onClick={onClose}
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm transition-opacity duration-200"
+          aria-hidden="true"
+        />
+      )}
+
+      {/* 抽屉面板 */}
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-50 bg-surface-raised rounded-t-2xl border-t border-border-default shadow-2xl transition-all duration-300 ease-out ${
+          isOpen ? "translate-y-0" : "translate-y-full"
+        }`}
+        style={{ maxHeight: "85vh" }}
+      >
+        {/* 抽屉头部 */}
+        <div className="sticky top-0 flex items-center justify-between p-4 border-b border-border-default bg-surface-raised rounded-t-2xl">
+          <div>
+            <h2 className="text-sm font-semibold text-text-primary">模型检索</h2>
+            <p className="text-xs text-text-muted mt-1">按时间、发布公司或名称定位</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex-shrink-0 rounded-lg p-2 text-text-secondary hover:bg-surface-input transition-colors"
+            aria-label="关闭"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* 抽屉内容 */}
+        <div className="overflow-y-auto p-4">
+          <FilterContent
+            {...filterProps}
+            inputId={inputId}
+            providerSelectId={providerSelectId}
+            modelSearchId={modelSearchId}
+          />
+        </div>
+      </div>
+    </>
   );
 };
 
-export default TimelineFilters;
+export default MobileFilterDrawer;

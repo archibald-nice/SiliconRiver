@@ -226,9 +226,11 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
     // SVG 引导线
     const leaderSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    leaderSvg.setAttribute("width", `${width}`);
-    leaderSvg.setAttribute("height", `${height}`);
-    leaderSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    const safeWidth = Number.isFinite(width) ? width : 0;
+    const safeHeight = Number.isFinite(height) ? height : 0;
+    leaderSvg.setAttribute("width", `${safeWidth}`);
+    leaderSvg.setAttribute("height", `${safeHeight}`);
+    leaderSvg.setAttribute("viewBox", `0 0 ${safeWidth} ${safeHeight}`);
     leaderSvg.style.position = "absolute";
     leaderSvg.style.top = "0";
     leaderSvg.style.left = "0";
@@ -721,10 +723,12 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
         const handleResize = () => {
           const newWidth = container.clientWidth;
-          modeInstance.onWindowResize(newWidth, height);
-          leaderSvg.setAttribute("width", `${newWidth}`);
-          leaderSvg.setAttribute("height", `${height}`);
-          leaderSvg.setAttribute("viewBox", `0 0 ${newWidth} ${height}`);
+          const safeNewWidth = Number.isFinite(newWidth) ? newWidth : 0;
+          const safeH = Number.isFinite(height) ? height : 0;
+          modeInstance.onWindowResize(safeNewWidth, safeH);
+          leaderSvg.setAttribute("width", `${safeNewWidth}`);
+          leaderSvg.setAttribute("height", `${safeH}`);
+          leaderSvg.setAttribute("viewBox", `0 0 ${safeNewWidth} ${safeH}`);
         };
         window.addEventListener("resize", handleResize);
 
@@ -784,16 +788,22 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
               // 更新引导线
               leaderSvg.style.visibility = "visible";
-              leaderSvg.setAttribute("width", `${viewportWidth}`);
-              leaderSvg.setAttribute("height", `${viewportHeight}`);
-              leaderSvg.setAttribute("viewBox", `0 0 ${viewportWidth} ${viewportHeight}`);
+              const safeVpWidth = Number.isFinite(viewportWidth) ? viewportWidth : 0;
+              const safeVpHeight = Number.isFinite(viewportHeight) ? viewportHeight : 0;
+              leaderSvg.setAttribute("width", `${safeVpWidth}`);
+              leaderSvg.setAttribute("height", `${safeVpHeight}`);
+              leaderSvg.setAttribute("viewBox", `0 0 ${safeVpWidth} ${safeVpHeight}`);
 
               const primaryAnchorX = primaryRect.left;
               const primaryAnchorY = primaryRect.top + primaryRect.height / 2;
-              primaryLeader.setAttribute("x1", `${screenX}`);
-              primaryLeader.setAttribute("y1", `${screenY}`);
-              primaryLeader.setAttribute("x2", `${primaryAnchorX}`);
-              primaryLeader.setAttribute("y2", `${primaryAnchorY}`);
+
+              // 确保所有值都是有效的数字，避免NaN
+              const safeAttrValue = (val: number) => (Number.isFinite(val) ? val : 0);
+
+              primaryLeader.setAttribute("x1", `${safeAttrValue(screenX)}`);
+              primaryLeader.setAttribute("y1", `${safeAttrValue(screenY)}`);
+              primaryLeader.setAttribute("x2", `${safeAttrValue(primaryAnchorX)}`);
+              primaryLeader.setAttribute("y2", `${safeAttrValue(primaryAnchorY)}`);
 
               const primaryRight = Math.min(primaryRect.left + primaryRect.width, viewportWidth - padding);
 
