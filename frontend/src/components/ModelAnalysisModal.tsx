@@ -10,6 +10,7 @@ interface ModelAnalysisModalProps {
 }
 
 const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProps) => {
+  const [avatarError, setAvatarError] = useState(false);
   const { data: analysis, isLoading, error } = useQuery({
     queryKey: ["model-analysis", modelId],
     queryFn: () => fetchModelAnalysis(modelId),
@@ -45,11 +46,9 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProp
     }
   }, []);
 
-  if (!analysis || !modelId) {
-    return null;
-  }
-
-  const avatarUrl = analysis && buildProviderAvatarUrl(analysis.model_id.split("/")[0]);
+  // 获取提供商名称
+  const provider = analysis ? analysis.model_id.split("/")[0] : null;
+  const avatarUrl = provider ? buildProviderAvatarUrl(provider) : null;
 
   return (
     <Transition appear show={isOpen} as={Fragment}>
@@ -111,13 +110,22 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProp
                     {/* 顶部：提供商 + 模型名称 */}
                     <div className="flex items-start gap-4 pb-4 border-b border-border-default/40">
                       <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border-default bg-avatar-bg">
-                        <span className="text-sm font-semibold text-text-secondary">
-                          {analysis.model_id.split("/")[0].charAt(0).toUpperCase()}
-                        </span>
+                        {avatarUrl && !avatarError ? (
+                          <img
+                            src={avatarUrl}
+                            alt={provider || "provider"}
+                            className="h-full w-full object-cover"
+                            onError={() => setAvatarError(true)}
+                          />
+                        ) : (
+                          <span className="text-sm font-semibold text-text-secondary">
+                            {provider?.charAt(0).toUpperCase() || "?"}
+                          </span>
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold uppercase tracking-wide text-accent-base">
-                          {analysis.model_id.split("/")[0]}
+                          {provider || "unknown"}
                         </p>
                         <h2 className="mt-1 text-lg font-semibold text-text-primary truncate">
                           {analysis.model_id.split("/")[1] || analysis.model_id}
