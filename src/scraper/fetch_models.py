@@ -467,3 +467,13 @@ if __name__ == "__main__":
     summary = fetch_and_store()
     for provider, (processed, inserted) in summary.items():
         print(f"{provider}: processed={processed} inserted={inserted}")
+
+    # 爬虫完成后，运行AI分析
+    try:
+        from src.scraper.analysis_orchestrator import run_post_scrape_analysis
+
+        LOGGER.info("爬虫完成，开始运行AI分析...")
+        analysis_result = run_post_scrape_analysis()
+        LOGGER.info(f"AI分析完成: {analysis_result}")
+    except Exception as e:
+        LOGGER.warning(f"AI分析运行失败: {e}")

@@ -14,22 +14,28 @@ ENV_PATH = BASE_DIR / ".env"
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH, override=False)
 
-DEFAULT_DB_URL = os.getenv("DATABASE_URL", "postgresql://USER:PASSWORD@HOST:5432/silicon_river")
+DEFAULT_DB_URL = os.getenv(
+    "DATABASE_URL", "postgresql://USER:PASSWORD@HOST:5432/silicon_river")
 
 MODEL_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS models (
-    id BIGSERIAL PRIMARY KEY,
-    model_id TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    model_name TEXT NOT NULL,
-    description TEXT,
-    tags TEXT,
-    created_at TIMESTAMP NOT NULL,
-    downloads BIGINT,
-    likes BIGINT,
-    model_card_url TEXT NOT NULL,
-    inserted_at TEXT NOT NULL,
-    UNIQUE (model_id)
+	id bigserial NOT NULL,
+	model_id text NOT NULL,
+	provider text NOT NULL,
+	model_name text NOT NULL,
+	description text NULL,
+	tags text NULL,
+	created_at timestamp NOT NULL,
+	downloads int8 NULL,
+	likes int8 NULL,
+	model_card_url text NOT NULL,
+	inserted_at text NOT NULL,
+	is_open_source bool NULL,
+	price jsonb NULL,
+	opencompass_rank int4 NULL,
+	huggingface_rank int4 NULL,
+	CONSTRAINT models_model_id_key UNIQUE (model_id),
+	CONSTRAINT models_pkey PRIMARY KEY (id)
 );
 """
 
@@ -69,6 +75,22 @@ CREATE TABLE IF NOT EXISTS model_tags (
 );
 """
 
+# 新增模型分析表
+MODEL_ANALYSIS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS model_analysis (
+	id BIGSERIAL PRIMARY KEY,
+	model_id TEXT NOT NULL UNIQUE,
+	provider TEXT,
+	model_name TEXT,
+	analysis_summary TEXT,
+	key_features TEXT[],
+	use_cases TEXT[],
+	performance_metrics JSONB,
+	llm_model_used TEXT,
+	analyzed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 INDICES_SQL: Iterable[str] = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_provider_id ON providers(provider_id);",
     "CREATE INDEX IF NOT EXISTS idx_providers_updated_at ON providers(updated_at DESC);",
@@ -89,6 +111,7 @@ def create_schema(db_url: str | None = None) -> None:
             cursor.execute(MODEL_TABLE_SQL)
             cursor.execute(SYNC_LOG_TABLE_SQL)
             cursor.execute(MODEL_TAGS_TABLE_SQL)
+            cursor.execute(MODEL_ANALYSIS_TABLE_SQL)
             for statement in INDICES_SQL:
                 cursor.execute(statement)
 

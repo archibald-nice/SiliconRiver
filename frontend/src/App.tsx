@@ -1,7 +1,7 @@
 ﻿import { MoonIcon, SunIcon, ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 
 import Footer from "./components/Footer";
-import Home from "./pages/Home";
+import HomeWithAnalysis from "./pages/HomeWithAnalysis";
 import { useTheme } from "./theme/ThemeProvider";
 
 const App = () => {
@@ -44,7 +44,7 @@ const App = () => {
         </div>
       </header>
       <main className="flex min-w-0 flex-1 overflow-hidden px-6 py-3">
-        <Home />
+        <HomeWithAnalysis />
       </main>
       <Footer />
     </div>

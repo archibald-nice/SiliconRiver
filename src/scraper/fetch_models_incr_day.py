@@ -20,6 +20,16 @@ def main() -> None:
     for provider, (processed, inserted) in summary.items():
         LOGGER.info("Provider %s: processed=%s inserted=%s", provider, processed, inserted)
 
+    # 爬虫完成后，运行AI分析
+    try:
+        from src.scraper.analysis_orchestrator import run_post_scrape_analysis
+
+        LOGGER.info("HuggingFace爬虫完成，开始运行AI分析...")
+        analysis_result = run_post_scrape_analysis()
+        LOGGER.info(f"AI分析完成: {analysis_result}")
+    except Exception as e:
+        LOGGER.warning(f"AI分析运行失败: {e}")
+
 
 if __name__ == "__main__":
     main()
