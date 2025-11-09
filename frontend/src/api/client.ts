@@ -58,6 +58,7 @@ export interface TimelineModel {
   price?: Record<string, unknown> | string | null;
   opencompass_rank?: number | null;
   huggingface_rank?: number | null;
+  analysis_summary?: string;
 }
 
 export interface TimelineResponse {
@@ -69,6 +70,31 @@ export interface TimelineResponse {
   end: string;
   preset: string;
   label: string;
+}
+
+export interface ModelAnalysis {
+  model_id: string;
+  analysis_summary?: string;
+  key_features: string[];
+  use_cases: string[];
+  performance_metrics?: Record<string, unknown>;
+  llm_model_used?: string;
+  analyzed_at?: string;
+  tags: string[];
+}
+
+export interface AnalyzedModelsResponse {
+  items: ModelAnalysis[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AnalysisStats {
+  total_models: number;
+  analyzed_models: number;
+  unanalyzed_models: number;
+  analysis_rate: number;
 }
 
 /** @deprecated 归档：模型列表视图已下线，接口保留以兼容历史用例。 */
@@ -120,4 +146,63 @@ export const fetchTimeline = async (params: {
   }
   const { data } = await api.get<TimelineResponse>("/api/timeline", { params: query });
   return data;
+};
+
+/**
+ * 获取单个模型的AI分析结果。
+ * @param modelId 模型ID (格式: provider/model_name)
+ */
+export const fetchModelAnalysis = async (modelId: string) => {
+  const { data } = await api.get<ModelAnalysis>(`/api/models/${encodeURIComponent(modelId)}/analysis`);
+  return data;
+};
+
+/**
+ * 获取已分析的模型列表。
+ */
+export const fetchAnalyzedModels = async (params: {
+  page?: number;
+  page_size?: number;
+  provider?: string;
+  feature?: string;
+  search?: string;
+}) => {
+  const query: Record<string, unknown> = {};
+  if (typeof params.page === "number") {
+    query.page = params.page;
+  }
+  if (typeof params.page_size === "number") {
+    query.page_size = params.page_size;
+  }
+  if (params.provider) {
+    query.provider = params.provider;
+  }
+  if (params.feature) {
+    query.feature = params.feature;
+  }
+  if (params.search) {
+    query.search = params.search;
+  }
+  const { data } = await api.get<AnalyzedModelsResponse>("/api/models/analyzed", { params: query });
+  return data;
+};
+
+/**
+ * 获取AI分析统计信息。
+ */
+export const fetchAnalysisStats = async (provider?: string) => {
+  const query: Record<string, unknown> = {};
+  if (provider) {
+    query.provider = provider;
+  }
+  const { data } = await api.get<AnalysisStats>("/api/analysis/stats", { params: query });
+  return data;
+};
+
+/**
+ * 获取所有可用的分析标签。
+ */
+export const fetchAnalysisTags = async () => {
+  const { data } = await api.get<{ tags: string[] }>("/api/analysis/tags");
+  return data.tags;
 };
