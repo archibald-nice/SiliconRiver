@@ -153,7 +153,7 @@ export const fetchTimeline = async (params: {
  * @param modelId 模型ID (格式: provider/model_name)
  */
 export const fetchModelAnalysis = async (modelId: string) => {
-  const { data } = await api.get<ModelAnalysis>(`/api/models/${encodeURIComponent(modelId)}/analysis`);
+  const { data } = await api.post<ModelAnalysis>("/api/models/analysis", { model_id: modelId });
   return data;
 };
 

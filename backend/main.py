@@ -4,19 +4,19 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path as PathLib
 from typing import Dict, List, Optional
 
 import psycopg
 import httpx
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = PathLib(__file__).resolve().parents[1]
 ENV_PATH = BASE_DIR / ".env"
 
 if ENV_PATH.exists():
@@ -541,9 +541,19 @@ def _parse_tags(raw: Optional[str]) -> List[str]:
     return [tag.strip() for tag in raw.split(",") if tag.strip()]
 
 
-@app.get("/api/models/{model_id:path}/analysis", response_model=ModelAnalysis)
-async def get_model_analysis(model_id: str, conn: psycopg.Connection = Depends(get_db)):
+class ModelIdRequest(BaseModel):
+    """请求体：包含模型ID"""
+    model_id: str
+
+
+@app.post("/api/models/analysis", response_model=ModelAnalysis)
+async def get_model_analysis(
+    request: ModelIdRequest,
+    conn: psycopg.Connection = Depends(get_db)
+):
     """获取单个模型的AI分析结果。"""
+    model_id = request.model_id
+
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
