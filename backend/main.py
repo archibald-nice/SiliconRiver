@@ -288,7 +288,7 @@ async def list_analyzed_models(
     return AnalysisList(items=items, total=total, page=page, page_size=page_size)
 
 
-@app.get("/api/models/{model_id}", response_model=Model)
+@app.get("/api/models/{model_id:path}", response_model=Model)
 async def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
@@ -541,7 +541,7 @@ def _parse_tags(raw: Optional[str]) -> List[str]:
     return [tag.strip() for tag in raw.split(",") if tag.strip()]
 
 
-@app.get("/api/models/{model_id}/analysis", response_model=ModelAnalysis)
+@app.get("/api/models/{model_id:path}/analysis", response_model=ModelAnalysis)
 async def get_model_analysis(model_id: str, conn: psycopg.Connection = Depends(get_db)):
     """获取单个模型的AI分析结果。"""
     with conn.cursor(row_factory=dict_row) as cursor:
