@@ -8,6 +8,7 @@ import { buildTimelineDataset } from "../timeline/core/dataset";
 import { TimelineEventNode } from "../timeline/core/event-node";
 import type { ITimelineMode } from "../timeline/modes/ITimelineMode";
 import { timelineModeFactory } from "../timeline/modes/ModeFactory";
+import ModelAnalysisModal from "./ModelAnalysisModal";
 
 type Timeline3DProps = {
   models: TimelineModel[];
@@ -105,6 +106,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     (document.documentElement.dataset.theme as 'light' | 'dark') || 'dark'
   );
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -592,21 +595,43 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
             // 原有模型节点逻辑
             const model = intersect.userData.model as TimelineModel | undefined;
             if (model) {
+              const truncatedSummary = model.analysis_summary
+                ? model.analysis_summary.slice(0, 150).concat(model.analysis_summary.length > 150 ? '...' : '')
+                : null;
+
+              const summaryMarkup = truncatedSummary
+                ? `<div class="mt-2 pt-2 border-t border-border-default/40">
+                     <div class="text-[9px] px-2 py-1 mb-1.5 rounded bg-yellow-400/15 text-yellow-600 font-semibold">💡 点击查看AI分析</div>
+                     <div class="text-[10px] text-text-muted line-clamp-3">${truncatedSummary}</div>
+                   </div>`
+                : '';
+
               tooltip.innerHTML = `
                 <div class="font-semibold text-accent-base">${model.provider}</div>
                 <div class="text-sm text-text-secondary">${model.model_name}</div>
                 <div class="mt-1 text-xs text-text-muted">${new Date(model.created_at).toLocaleString()}</div>
+                ${summaryMarkup}
               `;
               const { clientX, clientY } = event;
               tooltip.style.left = `${clientX - bounds.left + 14}px`;
               tooltip.style.top = `${clientY - bounds.top + 14}px`;
               tooltip.style.visibility = "visible";
+
+              // 设置鼠标指针：有分析数据时显示手形
+              if (model.analysis_summary) {
+                renderer.domElement.style.cursor = 'pointer';
+              } else {
+                renderer.domElement.style.cursor = 'default';
+              }
             }
+          } else {
+            renderer.domElement.style.cursor = 'default';
           }
         };
 
         const handlePointerLeave = () => {
           tooltip.style.visibility = "hidden";
+          renderer.domElement.style.cursor = 'default';
         };
 
         const handlePointerDown = (event: PointerEvent) => {
@@ -660,6 +685,16 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
           if (intersects.length > 0) {
             const mesh = intersects[0].object as InstanceType<typeof THREE.Mesh>;
+            const clickedModel = mesh.userData.model as TimelineModel | undefined;
+
+            // 检查是否是模型节点且有分析数据
+            if (clickedModel && clickedModel.analysis_summary) {
+              setSelectedModelId(clickedModel.model_id);
+              setIsModalOpen(true);
+              return;
+            }
+
+            // 处理其他点击事件（年份锚点等）
             const clickedIndex = modeInstance.handleNodeClick(mesh);
             if (clickedIndex !== null) {
               lastFocusDirection = clickedIndex > currentFocusIndex ? 1 : -1;
@@ -968,7 +1003,18 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     };
   }, []);
 
-  return <div ref={containerRef} className="relative h-full w-full" />;
+  return (
+    <>
+      <div ref={containerRef} className="relative h-full w-full" />
+      {selectedModelId && (
+        <ModelAnalysisModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          modelId={selectedModelId}
+        />
+      )}
+    </>
+  );
 };
 
 export default Timeline3D;

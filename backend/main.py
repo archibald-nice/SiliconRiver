@@ -76,6 +76,7 @@ class TimelineModel(BaseModel):
     price: Optional[Dict[str, object]] = None
     opencompass_rank: Optional[int] = None
     huggingface_rank: Optional[int] = None
+    analysis_summary: Optional[str] = None
 
 
 class TimelineResponse(BaseModel):
@@ -89,6 +90,40 @@ class TimelineResponse(BaseModel):
     end: datetime
     preset: str
     label: str
+
+
+class ModelAnalysis(BaseModel):
+    """模型AI分析结果。"""
+    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
+
+    model_id: str
+    analysis_summary: Optional[str] = None
+    key_features: List[str] = []
+    use_cases: List[str] = []
+    performance_metrics: Optional[Dict[str, object]] = None
+    llm_model_used: Optional[str] = None
+    analyzed_at: Optional[datetime] = None
+    tags: List[str] = []
+
+
+class AnalysisList(BaseModel):
+    """分析结果列表。"""
+    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
+
+    items: List[ModelAnalysis]
+    total: int
+    page: int
+    page_size: int
+
+
+class AnalysisStats(BaseModel):
+    """AI分析统计信息。"""
+    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
+
+    total_models: int
+    analyzed_models: int
+    unanalyzed_models: int
+    analysis_rate: float
 
 
 app = FastAPI(title="Silicon River API", version="0.1.0")
@@ -166,6 +201,91 @@ async def list_models(
     ]
 
     return ModelList(items=items, total=total, page=page, page_size=page_size)
+
+
+@app.get("/api/models/analyzed", response_model=AnalysisList)
+async def list_analyzed_models(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    provider: Optional[str] = None,
+    feature: Optional[str] = None,
+    search: Optional[str] = None,
+    conn: psycopg.Connection = Depends(get_db),
+):
+    """获取已分析的模型列表。支持按提供商、特征、搜索过滤。"""
+    offset = (page - 1) * page_size
+    filters: List[str] = []
+    params: List[object] = []
+
+    if provider:
+        filters.append("COALESCE(ma.provider, m.provider) = %s")
+        params.append(provider)
+    if feature:
+        filters.append("%s = ANY(ma.key_features)")
+        params.append(feature)
+    if search:
+        filters.append("(COALESCE(ma.model_name, m.model_name) ILIKE %s OR m.description ILIKE %s OR ma.analysis_summary ILIKE %s)")
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+
+    where_clause = " AND ".join(filters) if filters else "1=1"
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            f"""
+            SELECT COUNT(DISTINCT ma.model_id) AS total
+            FROM model_analysis ma
+            LEFT JOIN models m ON ma.model_id = m.model_id
+            WHERE {where_clause}
+            """,
+            params,
+        )
+        total_row = cursor.fetchone()
+        total = int(total_row["total"]) if total_row else 0
+
+        query_params = [*params, page_size, offset]
+        cursor.execute(
+            f"""
+            SELECT
+                ma.model_id,
+                ma.analysis_summary,
+                ma.key_features,
+                ma.use_cases,
+                ma.performance_metrics,
+                ma.llm_model_used,
+                ma.analyzed_at,
+                array_agg(DISTINCT mt.tag) FILTER (WHERE mt.tag IS NOT NULL) as tags,
+                COALESCE(ma.provider, m.provider) as provider,
+                COALESCE(ma.model_name, m.model_name) as model_name
+            FROM model_analysis ma
+            LEFT JOIN models m ON ma.model_id = m.model_id
+            LEFT JOIN model_tags mt ON ma.model_id = mt.model_id
+            WHERE {where_clause}
+            GROUP BY ma.id, ma.model_id, ma.analysis_summary, ma.key_features,
+                     ma.use_cases, ma.performance_metrics, ma.llm_model_used, ma.analyzed_at,
+                     COALESCE(ma.provider, m.provider),
+                     COALESCE(ma.model_name, m.model_name)
+            ORDER BY ma.analyzed_at DESC
+            LIMIT %s OFFSET %s
+            """,
+            query_params,
+        )
+        rows = cursor.fetchall()
+
+    items = [
+        ModelAnalysis(
+            model_id=row["model_id"],
+            analysis_summary=row["analysis_summary"],
+            key_features=row["key_features"] or [],
+            use_cases=row["use_cases"] or [],
+            performance_metrics=row["performance_metrics"],
+            llm_model_used=row["llm_model_used"],
+            analyzed_at=row["analyzed_at"],
+            tags=list(filter(None, row["tags"] or [])),
+        )
+        for row in rows
+    ]
+
+    return AnalysisList(items=items, total=total, page=page, page_size=page_size)
 
 
 @app.get("/api/models/{model_id}", response_model=Model)
@@ -259,9 +379,11 @@ async def timeline_models(
                 m.is_open_source,
                 m.price,
                 m.opencompass_rank,
-                m.huggingface_rank
+                m.huggingface_rank,
+                ma.analysis_summary
             FROM models AS m
             LEFT JOIN providers AS p ON m.provider = p.provider_id
+            LEFT JOIN model_analysis AS ma ON m.model_id = ma.model_id
             WHERE {where_clause}
             ORDER BY m.created_at {order_clause}
             LIMIT %s OFFSET %s
@@ -284,6 +406,7 @@ async def timeline_models(
             price=row.get("price"),
             opencompass_rank=row.get("opencompass_rank"),
             huggingface_rank=row.get("huggingface_rank"),
+            analysis_summary=row.get("analysis_summary"),
         )
         for row in rows
     ]
@@ -416,6 +539,102 @@ def _parse_tags(raw: Optional[str]) -> List[str]:
         except json.JSONDecodeError:
             pass
     return [tag.strip() for tag in raw.split(",") if tag.strip()]
+
+
+@app.get("/api/models/{model_id}/analysis", response_model=ModelAnalysis)
+async def get_model_analysis(model_id: str, conn: psycopg.Connection = Depends(get_db)):
+    """获取单个模型的AI分析结果。"""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                ma.model_id,
+                ma.analysis_summary,
+                ma.key_features,
+                ma.use_cases,
+                ma.performance_metrics,
+                ma.llm_model_used,
+                ma.analyzed_at,
+                array_agg(DISTINCT mt.tag) FILTER (WHERE mt.tag IS NOT NULL) as tags
+            FROM model_analysis ma
+            LEFT JOIN model_tags mt ON ma.model_id = mt.model_id
+            WHERE ma.model_id = %s
+            GROUP BY ma.id, ma.model_id, ma.analysis_summary, ma.key_features,
+                     ma.use_cases, ma.performance_metrics, ma.llm_model_used, ma.analyzed_at
+            """,
+            [model_id],
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Model analysis not found")
+
+    return ModelAnalysis(
+        model_id=row["model_id"],
+        analysis_summary=row["analysis_summary"],
+        key_features=row["key_features"] or [],
+        use_cases=row["use_cases"] or [],
+        performance_metrics=row["performance_metrics"],
+        llm_model_used=row["llm_model_used"],
+        analyzed_at=row["analyzed_at"],
+        tags=list(filter(None, row["tags"] or [])),
+    )
+
+
+@app.get("/api/analysis/stats", response_model=AnalysisStats)
+async def get_analysis_stats(
+    provider: Optional[str] = None,
+    conn: psycopg.Connection = Depends(get_db),
+):
+    """获取AI分析统计信息。"""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        # 统计总模型数和已分析模型数
+        query = """
+            SELECT
+                COUNT(DISTINCT m.model_id) as total_models,
+                COUNT(DISTINCT ma.model_id) as analyzed_models
+            FROM models m
+            LEFT JOIN model_analysis ma ON m.model_id = ma.model_id
+            WHERE 1=1
+        """
+        params = []
+
+        if provider:
+            query += " AND m.provider = %s"
+            params.append(provider)
+
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+
+    total_models = int(row["total_models"]) if row else 0
+    analyzed_models = int(row["analyzed_models"]) if row else 0
+    unanalyzed_models = total_models - analyzed_models
+    analysis_rate = (analyzed_models / total_models * 100) if total_models > 0 else 0.0
+
+    return AnalysisStats(
+        total_models=total_models,
+        analyzed_models=analyzed_models,
+        unanalyzed_models=unanalyzed_models,
+        analysis_rate=round(analysis_rate, 2),
+    )
+
+
+@app.get("/api/analysis/tags")
+async def get_analysis_tags(conn: psycopg.Connection = Depends(get_db)):
+    """获取所有可用的分析标签。"""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT DISTINCT tag
+            FROM model_tags
+            WHERE tag IS NOT NULL
+            ORDER BY tag
+            """
+        )
+        rows = cursor.fetchall()
+
+    tags = [row["tag"] for row in rows]
+    return {"tags": tags}
 
 
 @app.get("/health")
