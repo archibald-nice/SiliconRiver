@@ -159,7 +159,7 @@ App (Timeline3D.tsx)
 - `model_name`、`description`、`tags`: 可搜索的元数据
 - `created_at`: 发布时间戳（UTC）
 - `is_open_source`、`price`: 许可证和成本信息
-- `opencompass_rank`、`huggingface_rank`: 排名指标
+- `huggingface_rank`: 排名指标
 - 在 `created_at`、`provider`、`model_name` 上建立索引以提高查询性能
 
 **providers** 表:

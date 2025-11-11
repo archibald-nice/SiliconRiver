@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path as PathLib
 from typing import Dict, List, Optional
@@ -17,6 +18,22 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict
 
 BASE_DIR = PathLib(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
+
+from backend.models import (
+    Model,
+    ModelList,
+    ProviderStat,
+    TimelineModel,
+    TimelineResponse,
+    ModelAnalysis,
+    AnalysisList,
+    AnalysisStats,
+    ArenaScoreInfo,
+    ArenaScoreSummary,
+    TimelineModelWithAnalysis,
+)
+
 ENV_PATH = BASE_DIR / ".env"
 
 if ENV_PATH.exists():
@@ -31,99 +48,6 @@ AVATAR_MAX_BYTES = int(os.getenv("AVATAR_MAX_BYTES", "524288"))
 def get_connection() -> psycopg.Connection:
     conn = psycopg.connect(DATABASE_URL)
     return conn
-
-
-class Model(BaseModel):
-    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
-
-    model_id: str
-    provider: str
-    model_name: str
-    description: Optional[str]
-    tags: List[str]
-    created_at: datetime
-    downloads: Optional[int]
-    likes: Optional[int]
-    model_card_url: str
-
-
-class ModelList(BaseModel):
-    items: List[Model]
-    total: int
-    page: int
-    page_size: int
-
-
-class ProviderStat(BaseModel):
-    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
-
-    provider: str
-    model_count: int
-
-
-class TimelineModel(BaseModel):
-    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
-
-    model_id: str
-    provider: str
-    model_name: str
-    description: Optional[str]
-    created_at: datetime
-    model_card_url: str
-    tags: List[str]
-    avatar_url: Optional[str] = None
-    is_open_source: Optional[bool] = None
-    price: Optional[Dict[str, object]] = None
-    opencompass_rank: Optional[int] = None
-    huggingface_rank: Optional[int] = None
-    analysis_summary: Optional[str] = None
-
-
-class TimelineResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
-
-    items: List[TimelineModel]
-    total: int
-    page: int
-    page_size: int
-    start: datetime
-    end: datetime
-    preset: str
-    label: str
-
-
-class ModelAnalysis(BaseModel):
-    """模型AI分析结果。"""
-    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
-
-    model_id: str
-    analysis_summary: Optional[str] = None
-    key_features: List[str] = []
-    use_cases: List[str] = []
-    performance_metrics: Optional[Dict[str, object]] = None
-    llm_model_used: Optional[str] = None
-    analyzed_at: Optional[datetime] = None
-    tags: List[str] = []
-
-
-class AnalysisList(BaseModel):
-    """分析结果列表。"""
-    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
-
-    items: List[ModelAnalysis]
-    total: int
-    page: int
-    page_size: int
-
-
-class AnalysisStats(BaseModel):
-    """AI分析统计信息。"""
-    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
-
-    total_models: int
-    analyzed_models: int
-    unanalyzed_models: int
-    analysis_rate: float
 
 
 app = FastAPI(title="Silicon River API", version="0.1.0")
@@ -378,7 +302,6 @@ async def timeline_models(
                 p.avatar_url,
                 m.is_open_source,
                 m.price,
-                m.opencompass_rank,
                 m.huggingface_rank,
                 ma.analysis_summary
             FROM models AS m
@@ -404,7 +327,6 @@ async def timeline_models(
             avatar_url=row.get("avatar_url"),
             is_open_source=row.get("is_open_source"),
             price=row.get("price"),
-            opencompass_rank=row.get("opencompass_rank"),
             huggingface_rank=row.get("huggingface_rank"),
             analysis_summary=row.get("analysis_summary"),
         )
@@ -645,6 +567,143 @@ async def get_analysis_tags(conn: psycopg.Connection = Depends(get_db)):
 
     tags = [row["tag"] for row in rows]
     return {"tags": tags}
+
+
+@app.get("/api/arena/scores/{model_id}")
+async def get_model_arena_scores(
+    model_id: str = Path(..., description="模型ID"),
+    conn: psycopg.Connection = Depends(get_db),
+) -> ArenaScoreSummary:
+    """获取模型的行业评分信息。"""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT model_id, source, rank, score, category, updated_at
+            FROM model_arena_info
+            WHERE model_id = %s
+            ORDER BY source, category
+            """,
+            (model_id,)
+        )
+        rows = cursor.fetchall()
+
+    if not rows:
+        return ArenaScoreSummary(model_id=model_id, has_score=False)
+
+    # 构建评分信息
+    details = [
+        ArenaScoreInfo(
+            model_id=row["model_id"],
+            source=row["source"],
+            rank=row["rank"],
+            score=row["score"],
+            category=row["category"],
+            updated_at=row["updated_at"]
+        )
+        for row in rows
+    ]
+
+    # 计算综合评分
+    overall_scores = [d.score for d in details if d.category == "overall" and d.score is not None]
+    combined_score = round(sum(overall_scores) / len(overall_scores), 2) if overall_scores else None
+
+    sources = list(set(d.source for d in details))
+
+    return ArenaScoreSummary(
+        has_score=True,
+        sources=sources,
+        combined_score=combined_score,
+        details=details
+    )
+
+
+@app.get("/api/models/{model_id}/analysis-with-scores")
+async def get_model_analysis_with_scores(
+    model_id: str = Path(..., description="模型ID"),
+    conn: psycopg.Connection = Depends(get_db),
+) -> TimelineModelWithAnalysis | None:
+    """获取模型的完整分析数据（包括里程碑信息和评分）。"""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        # 查询基础模型信息
+        cursor.execute(
+            """
+            SELECT m.model_id, m.provider, m.model_name, m.description, m.created_at,
+                   m.model_card_url, m.tags, m.is_open_source, m.price,
+                   m.huggingface_rank,
+                   ma.analysis_summary, ma.is_milestone, ma.milestone_features
+            FROM models m
+            LEFT JOIN model_analysis ma ON m.model_id = ma.model_id
+            WHERE m.model_id = %s
+            """,
+            (model_id,)
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        return None
+
+    # 获取评分信息
+    score_summary = await get_model_arena_scores(model_id, conn)
+
+    # 构建响应
+    return TimelineModelWithAnalysis(
+        model_id=row["model_id"],
+        provider=row["provider"],
+        model_name=row["model_name"],
+        description=row["description"],
+        created_at=row["created_at"],
+        model_card_url=row["model_card_url"],
+        tags=_parse_tags(row["tags"]),
+        avatar_url=None,  # 可以通过额外的提供商查询获取
+        is_open_source=row["is_open_source"],
+        price=row["price"],
+        huggingface_rank=row["huggingface_rank"],
+        analysis_summary=row["analysis_summary"],
+        is_milestone=row["is_milestone"] or False,
+        milestone_features=row["milestone_features"],
+        arena_score=score_summary
+    )
+
+
+@app.post("/api/arena/scores/batch")
+async def batch_update_arena_scores(
+    scores_data: dict,
+    conn: psycopg.Connection = Depends(get_db),
+) -> dict:
+    """批量更新模型的行业评分数据。"""
+    source = scores_data.get("source")
+    scores = scores_data.get("scores", [])
+
+    if not source or not scores:
+        raise HTTPException(status_code=400, detail="缺少必要参数: source 和 scores")
+
+    try:
+        with conn.cursor() as cursor:
+            for score_item in scores:
+                cursor.execute(
+                    """
+                    INSERT INTO model_arena_info
+                    (model_id, source, rank, score, category)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (model_id, source, category)
+                    DO UPDATE SET
+                        rank = EXCLUDED.rank,
+                        score = EXCLUDED.score,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        score_item.get("model_id"),
+                        source,
+                        score_item.get("rank"),
+                        score_item.get("score"),
+                        score_item.get("category", "overall")
+                    )
+                )
+            conn.commit()
+        return {"success": True, "updated": len(scores)}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")
 
 
 @app.get("/health")

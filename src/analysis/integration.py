@@ -8,7 +8,7 @@ from typing import Optional
 
 import psycopg
 
-from src.analysis.analyzer import ModelAnalyzer, AnalysisResult
+from src.analysis.async_analyzer import AsyncModelAnalyzer, AnalysisResult
 from src.analysis.tag_generator import TagGenerator
 
 LOGGER = logging.getLogger("silicon_river.integration")
@@ -20,21 +20,21 @@ class AnalysisIntegration:
     def __init__(
         self,
         db_url: str,
-        analyzer: ModelAnalyzer | None = None,
+        analyzer: AsyncModelAnalyzer | None = None,
         tag_generator: TagGenerator | None = None,
     ):
         """初始化集成管理器。
 
         Args:
             db_url: 数据库连接URL
-            analyzer: 模型分析器实例（可选）
+            analyzer: 异步模型分析器实例（可选）
             tag_generator: 标签生成器实例（可选）
         """
         self.db_url = db_url
-        self.analyzer = analyzer or ModelAnalyzer()
+        self.analyzer = analyzer or AsyncModelAnalyzer()
         self.tag_generator = tag_generator or TagGenerator()
 
-    def analyze_and_save_model(
+    async def analyze_and_save_model(
         self,
         model_id: str,
         model_name: str,
@@ -42,7 +42,7 @@ class AnalysisIntegration:
         tags: list[str] | None = None,
         provider: str | None = None,
     ) -> bool:
-        """分析模型并保存分析结果到数据库。
+        """异步分析模型并保存分析结果到数据库。
 
         Args:
             model_id: 模型ID
@@ -54,16 +54,21 @@ class AnalysisIntegration:
         Returns:
             是否成功保存
         """
-        # 分析模型
-        analysis_result = self.analyzer.analyze_model(
-            model_name=model_name,
-            description=description,
-            tags=tags,
-        )
+        # 异步分析模型（使用异步上下文管理器）
+        async with self.analyzer as analyzer:
+            # 构建模型列表
+            analysis_results = await analyzer.analyze_batch(
+                model_ids=[model_id],
+                model_names=[model_name],
+                descriptions=[description],
+                tags_list=[tags or []],
+            )
 
-        if not analysis_result:
+        if not analysis_results or not analysis_results[0]:
             LOGGER.warning(f"模型分析失败，跳过数据库保存：{model_id}")
             return False
+
+        analysis_result = analysis_results[0]
 
         # 生成标签
         generated_tags = self.tag_generator.generate_tags(
@@ -185,13 +190,13 @@ class AnalysisIntegration:
 
         LOGGER.debug(f"已保存 {len(tags)} 个标签到数据库")
 
-    def analyze_batch(
+    async def analyze_batch(
         self,
         models: list[dict],
         batch_size: int = 10,
         delay_between_batches: float = 1.0,
     ) -> dict:
-        """批量分析模型。
+        """异步批量分析模型。
 
         Args:
             models: 模型列表，每个元素为dict包含model_id, model_name, description, tags
@@ -201,18 +206,24 @@ class AnalysisIntegration:
         Returns:
             包含成功/失败统计的结果字典
         """
+        import asyncio
+
         results = {
             "total": len(models),
             "succeeded": 0,
             "failed": 0,
             "skipped": 0,
+            "errors": {},  # 按错误类型统计
         }
 
-        LOGGER.info(f"开始批量分析 {len(models)} 个模型")
+        LOGGER.info(f"开始异步批量分析 {len(models)} 个模型（批大小: {batch_size}，批间延迟: {delay_between_batches}秒）")
+
+        consecutive_failures = 0
+        max_consecutive_failures = 5  # 连续失败5次后暂停
 
         for i, model in enumerate(models):
             try:
-                success = self.analyze_and_save_model(
+                success = await self.analyze_and_save_model(
                     model_id=model.get("model_id"),
                     model_name=model.get("model_name"),
                     description=model.get("description"),
@@ -222,27 +233,44 @@ class AnalysisIntegration:
 
                 if success:
                     results["succeeded"] += 1
+                    consecutive_failures = 0  # 重置连续失败计数
                 else:
                     results["failed"] += 1
+                    consecutive_failures += 1
 
             except Exception as e:
-                LOGGER.error(f"模型分析异常 {model.get('model_id')}: {e}")
+                error_type = type(e).__name__
+                results["errors"][error_type] = results["errors"].get(error_type, 0) + 1
+                LOGGER.error(f"模型分析异常 {model.get('model_id')}: {error_type}: {e}")
                 results["failed"] += 1
+                consecutive_failures += 1
+
+            # 如果连续失败过多，暂停一段时间
+            if consecutive_failures >= max_consecutive_failures:
+                LOGGER.warning(
+                    f"连续失败 {consecutive_failures} 次，暂停 {delay_between_batches * 2} 秒后继续"
+                )
+                await asyncio.sleep(delay_between_batches * 2)
+                consecutive_failures = 0
 
             # 每处理batch_size个模型后，等待一段时间
             if (i + 1) % batch_size == 0:
+                progress = f"{i + 1}/{len(models)}"
+                success_rate = round(results['succeeded'] / (i + 1) * 100, 1) if i + 1 > 0 else 0
                 LOGGER.info(
-                    f"已处理 {i + 1}/{len(models)} 个模型，"
-                    f"成功: {results['succeeded']}, 失败: {results['failed']}"
+                    f"已处理 {progress} 个模型，"
+                    f"成功: {results['succeeded']}, 失败: {results['failed']}，"
+                    f"成功率: {success_rate}%"
                 )
                 if i + 1 < len(models):
-                    import time
-                    time.sleep(delay_between_batches)
+                    await asyncio.sleep(delay_between_batches)
 
         LOGGER.info(
             f"批量分析完成 - 总计: {results['total']}, "
             f"成功: {results['succeeded']}, 失败: {results['failed']}"
         )
+        if results['errors']:
+            LOGGER.info(f"错误分布: {results['errors']}")
 
         return results
 
