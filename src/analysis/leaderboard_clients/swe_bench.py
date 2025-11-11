@@ -30,9 +30,9 @@ class SWEBenchLeaderboardClient(LeaderboardClient):
 
     # 官方排行榜 JSON 数据源
     LEADERBOARD_URLS = {
-        "bash-only": "https://raw.githubusercontent.com/swe-bench/swe-bench.github.io/main/assets/data/leaderboard_bash_only.json",
-        "test": "https://raw.githubusercontent.com/swe-bench/swe-bench.github.io/main/assets/data/leaderboard_test.json",
-        "verified": "https://raw.githubusercontent.com/swe-bench/swe-bench.github.io/main/assets/data/leaderboard_verified.json",
+        "bash-only": "https://swe-bench.github.io/assets/data/leaderboard_bash_only.json",
+        "test": "https://swe-bench.github.io/assets/data/leaderboard_test.json",
+        "verified": "https://swe-bench.github.io/assets/data/leaderboard_verified.json",
     }
 
     REQUEST_TIMEOUT = 15  # 秒
@@ -50,7 +50,7 @@ class SWEBenchLeaderboardClient(LeaderboardClient):
         """获取 SWE-bench 排行榜数据。
 
         Returns:
-            包含所有榜单数据的字典
+            包含所有榜单数据的字典（失败时返回空字典）
         """
         result = {}
 
@@ -73,9 +73,10 @@ class SWEBenchLeaderboardClient(LeaderboardClient):
 
                 LOGGER.debug(f"获取 {category} 排行榜数据成功")
             except Exception as e:
-                LOGGER.error(f"获取 {category} 排行榜数据失败：{e}")
-                continue
+                LOGGER.warning(f"获取 {category} 排行榜数据失败（将跳过此排行榜）：{e}")
+                # 优雅地继续，不返回该类别的数据
 
+        # 即使所有请求都失败，也返回空字典而不是异常
         return result
 
     async def _fetch_with_retry(self, url: str) -> dict[str, Any]:
