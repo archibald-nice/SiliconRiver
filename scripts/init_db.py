@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS models (
 	inserted_at text NOT NULL,
 	is_open_source bool NULL,
 	price jsonb NULL,
-	opencompass_rank int4 NULL,
 	huggingface_rank int4 NULL,
 	CONSTRAINT models_model_id_key UNIQUE (model_id),
 	CONSTRAINT models_pkey PRIMARY KEY (id)
@@ -75,7 +74,7 @@ CREATE TABLE IF NOT EXISTS model_tags (
 );
 """
 
-# 新增模型分析表
+# 新增模型分析表（包含里程碑字段）
 MODEL_ANALYSIS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS model_analysis (
 	id BIGSERIAL PRIMARY KEY,
@@ -87,7 +86,26 @@ CREATE TABLE IF NOT EXISTS model_analysis (
 	use_cases TEXT[],
 	performance_metrics JSONB,
 	llm_model_used TEXT,
-	analyzed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	is_milestone BOOLEAN DEFAULT FALSE,
+	milestone_features TEXT,
+	analyzed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# 新增模型行业评分信息表
+MODEL_ARENA_INFO_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS model_arena_info (
+	id BIGSERIAL PRIMARY KEY,
+	model_id TEXT NOT NULL,
+	source TEXT NOT NULL,
+	rank INTEGER,
+	score FLOAT,
+	category VARCHAR(100) DEFAULT 'overall',
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+	UNIQUE(model_id, source, category),
+	FOREIGN KEY(model_id) REFERENCES models(model_id) ON DELETE CASCADE
 );
 """
 
@@ -99,6 +117,12 @@ INDICES_SQL: Iterable[str] = (
     "CREATE INDEX IF NOT EXISTS idx_sync_log_provider_started_at ON sync_log(provider, started_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_model_tags_tag ON model_tags(tag);",
     "CREATE INDEX IF NOT EXISTS idx_model_tags_model_id ON model_tags(model_id);",
+    "CREATE INDEX IF NOT EXISTS idx_model_analysis_model_id ON model_analysis(model_id);",
+    "CREATE INDEX IF NOT EXISTS idx_model_analysis_is_milestone ON model_analysis(is_milestone);",
+    "CREATE INDEX IF NOT EXISTS idx_model_analysis_analyzed_at ON model_analysis(analyzed_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_model_arena_info_model_id ON model_arena_info(model_id);",
+    "CREATE INDEX IF NOT EXISTS idx_model_arena_info_source ON model_arena_info(source);",
+    "CREATE INDEX IF NOT EXISTS idx_model_arena_info_source_category ON model_arena_info(source, category);",
 )
 
 
@@ -112,6 +136,7 @@ def create_schema(db_url: str | None = None) -> None:
             cursor.execute(SYNC_LOG_TABLE_SQL)
             cursor.execute(MODEL_TAGS_TABLE_SQL)
             cursor.execute(MODEL_ANALYSIS_TABLE_SQL)
+            cursor.execute(MODEL_ARENA_INFO_TABLE_SQL)
             for statement in INDICES_SQL:
                 cursor.execute(statement)
 

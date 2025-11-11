@@ -157,6 +157,103 @@ class AnalysisOrchestrator:
             # 如果解析失败，尝试按逗号分割
             return [tag.strip() for tag in str(tags_str).split(",") if tag.strip()]
 
+    def _fetch_models_for_reanalysis(
+        self,
+        strategy: str,
+        provider: str | None = None,
+        limit: int | None = None,
+        **kwargs
+    ) -> list[dict]:
+        """根据不同策略获取需要重新分析的模型。
+
+        Args:
+            strategy: 策略类型 ('force', 'older_than', 'missing_fields')
+            provider: 提供商过滤（可选）
+            limit: 数量限制
+            **kwargs: 策略特定参数
+                - days: 用于 'older_than' 策略
+                - fields: 用于 'missing_fields' 策略
+
+        Returns:
+            待分析模型列表
+        """
+        limit = limit or ANALYSIS_LIMIT
+
+        try:
+            with psycopg.connect(self.db_url) as conn:
+                with conn.cursor() as cursor:
+                    # 基础查询
+                    base_query = """
+                        SELECT m.model_id, m.model_name, m.description, m.tags, m.provider
+                        FROM models m
+                    """
+
+                    params = []
+
+                    # 根据策略构建WHERE子句
+                    if strategy == "force":
+                        query = base_query + " WHERE 1=1"
+
+                    elif strategy == "older_than":
+                        days = kwargs.get("days")
+                        if days is None:
+                            raise ValueError("'older_than' 策略需要指定 days 参数")
+                        query = base_query + """
+                            INNER JOIN model_analysis ma ON m.model_id = ma.model_id
+                            WHERE ma.analyzed_at < NOW() - INTERVAL '%s days'
+                        """
+                        params.append(days)
+
+                    elif strategy == "missing_fields":
+                        fields = kwargs.get("fields", [])
+                        if not fields:
+                            raise ValueError("'missing_fields' 策略需要指定 fields 参数")
+
+                        conditions = []
+                        if "is_milestone" in fields:
+                            conditions.append("(ma.is_milestone IS NULL OR ma.is_milestone = FALSE)")
+                        if "milestone_features" in fields:
+                            conditions.append("ma.milestone_features IS NULL")
+
+                        if not conditions:
+                            raise ValueError(f"无法识别的字段: {fields}")
+
+                        query = base_query + f"""
+                            INNER JOIN model_analysis ma ON m.model_id = ma.model_id
+                            WHERE ({' OR '.join(conditions)})
+                        """
+
+                    else:
+                        raise ValueError(f"未知策略: {strategy}")
+
+                    # 添加提供商过滤
+                    if provider:
+                        query += " AND m.provider = %s"
+                        params.append(provider)
+
+                    # 排序和限制
+                    query += " ORDER BY m.inserted_at DESC LIMIT %s"
+                    params.append(limit)
+
+                    cursor.execute(query, params)
+
+                    # 转换结果
+                    models = []
+                    for row in cursor.fetchall():
+                        models.append({
+                            "model_id": row[0],
+                            "model_name": row[1],
+                            "description": row[2],
+                            "tags": self._parse_tags(row[3]),
+                            "provider": row[4],
+                        })
+
+                    return models
+
+        except psycopg.Error as e:
+            LOGGER.error(f"获取待重新分析模型失败: {e}")
+            return []
+
     def get_analysis_stats(self, provider: str | None = None) -> dict:
         """获取模型分析统计信息。
 

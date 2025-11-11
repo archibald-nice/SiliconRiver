@@ -48,7 +48,6 @@ class ModelRecord:
     inserted_at: str
     is_open_source: Optional[bool]
     price: Optional[Dict[str, object]]
-    opencompass_rank: Optional[int]
     huggingface_rank: Optional[int]
 
 
@@ -118,7 +117,6 @@ def to_record(provider: str, info: ModelInfo) -> ModelRecord:
         inserted_at=inserted_at,
         is_open_source=is_open_source,
         price=None,
-        opencompass_rank=None,
         huggingface_rank=None,
     )
 
@@ -360,8 +358,8 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                 INSERT INTO models (
                     model_id, provider, model_name, description, tags,
                     created_at, downloads, likes, model_card_url, inserted_at,
-                    is_open_source, price, opencompass_rank, huggingface_rank
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    is_open_source, price, huggingface_rank
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (model_id) DO UPDATE SET
                     provider = EXCLUDED.provider,
                     model_name = EXCLUDED.model_name,
@@ -374,7 +372,6 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     inserted_at = EXCLUDED.inserted_at,
                     is_open_source = EXCLUDED.is_open_source,
                     price = COALESCE(EXCLUDED.price, models.price),
-                    opencompass_rank = COALESCE(EXCLUDED.opencompass_rank, models.opencompass_rank),
                     huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank)
                 """,
                 (
@@ -390,7 +387,6 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     record.inserted_at,
                     record.is_open_source,
                     json.dumps(record.price, ensure_ascii=False) if record.price is not None else None,
-                    record.opencompass_rank,
                     record.huggingface_rank,
                 ),
             )

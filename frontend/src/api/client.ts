@@ -56,7 +56,6 @@ export interface TimelineModel {
   avatar_url?: string;
   is_open_source?: boolean | null;
   price?: Record<string, unknown> | string | null;
-  opencompass_rank?: number | null;
   huggingface_rank?: number | null;
   analysis_summary?: string;
 }

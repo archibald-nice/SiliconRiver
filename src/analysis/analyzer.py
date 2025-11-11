@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
+from openai import OpenAI, APIError, APIConnectionError, APITimeoutError, RateLimitError
 from dotenv import load_dotenv
 
 LOGGER = logging.getLogger("silicon_river.analyzer")
@@ -23,6 +23,9 @@ DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "30"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 RETRY_DELAY = int(os.getenv("RETRY_DELAY", "2"))
+
+# 定义不应重试的HTTP错误码
+NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 405, 406, 409, 410, 422}
 
 
 @dataclass(slots=True)
@@ -108,12 +111,27 @@ class ModelAnalyzer:
                 response = self._call_api(prompt)
                 if response:
                     return self._parse_response(model_name, response)
-            except Exception as e:
+            except APIError as e:
+                # 检查是否是不可重试的错误
+                status_code = getattr(e, 'status_code', None)
+                if status_code in NON_RETRYABLE_STATUS_CODES:
+                    LOGGER.error(
+                        f"模型分析失败 {model_name}（不可重试错误，HTTP {status_code}）: {e}"
+                    )
+                    return None
+
                 LOGGER.warning(
-                    f"模型分析失败 {model_name}（尝试 {attempt}/{MAX_RETRIES}）: {e}"
+                    f"模型分析失败 {model_name}（尝试 {attempt}/{MAX_RETRIES}，HTTP {status_code}）: {e}"
                 )
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY * attempt)  # 指数退避
+                continue
+            except Exception as e:
+                LOGGER.warning(
+                    f"模型分析异常 {model_name}（尝试 {attempt}/{MAX_RETRIES}）: {e}"
+                )
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY * attempt)
                 continue
 
         LOGGER.error(f"模型分析最终失败：{model_name}")
@@ -191,14 +209,23 @@ class ModelAnalyzer:
             if response.choices and len(response.choices) > 0:
                 return response.choices[0].message.content
 
-        except APITimeoutError:
-            LOGGER.error(f"API请求超时（{self.timeout}秒）")
+        except APITimeoutError as e:
+            LOGGER.warning(f"API请求超时（{self.timeout}秒）: {e}")
         except APIConnectionError as e:
-            LOGGER.error(f"API连接失败: {e}")
+            LOGGER.warning(f"API连接失败（网络问题）: {e}")
         except APIError as e:
-            LOGGER.error(f"API请求失败: {e}")
+            # 捕获特定的HTTP错误
+            status_code = getattr(e, 'status_code', None)
+            if status_code == 404:
+                LOGGER.warning(f"API 404 错误（端点不存在）: {e}")
+            elif status_code == 429:
+                LOGGER.warning(f"API 429 错误（速率限制）: {e}")
+            elif status_code >= 500:
+                LOGGER.warning(f"API 5xx 错误（服务器问题，HTTP {status_code}）: {e}")
+            else:
+                LOGGER.warning(f"API 错误（HTTP {status_code}）: {e}")
         except Exception as e:
-            LOGGER.error(f"API调用异常: {e}")
+            LOGGER.warning(f"API调用异常: {type(e).__name__}: {e}")
 
         return None
 

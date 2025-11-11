@@ -737,7 +737,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           let bestRank = Infinity;
 
           sorted.forEach((model, index) => {
-            const rank = model.opencompass_rank || model.huggingface_rank || Infinity;
+            const rank = model.huggingface_rank || Infinity;
             if (rank < bestRank && rank > 0) {
               bestRank = rank;
               bestIndex = index;
