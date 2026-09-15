@@ -183,10 +183,10 @@ open http://localhost:5173  # 应该看到 3D 时间轴
 
 ```bash
 # 从 Hugging Face 抓取模型（全量）
-python src/scraper/fetch_models.py
+python -m src.scraper.fetch_models
 
 # 从 OpenRouter 抓取模型（全量）
-python src/scraper/fetch_models_openrouter.py
+python -m src.scraper.fetch_models_openrouter
 
 # 验证数据
 psql -d silicon_river -c "SELECT COUNT(*) FROM models;"
@@ -196,10 +196,10 @@ psql -d silicon_river -c "SELECT COUNT(*) FROM models;"
 
 ```bash
 # 每日增量更新（Hugging Face）
-python src/scraper/fetch_models_incr_day.py --limit 200
+python -m src.scraper.fetch_models_incr_day
 
 # 每日增量更新（OpenRouter）
-python src/scraper/fetch_models_openrouter_incr_day.py --limit 300
+python -m src.scraper.fetch_models_openrouter_incr_day
 
 # 更新排行榜缓存
 python scripts/update_leaderboards.py
@@ -656,7 +656,7 @@ sudo journalctl -u silicon-river -f
 - [ ] 依赖已安装：`pip install -r requirements.txt`
 - [ ] 数据库已初始化：`python scripts/init_db.py`
 - [ ] 测试通过：`pytest tests/ -v`
-- [ ] 数据已加载：`python src/scraper/fetch_models.py`
+- [ ] 数据已加载：`python -m src.scraper.fetch_models`
 - [ ] 排行榜已更新：`python scripts/update_leaderboards.py`
 - [ ] 后端可启动：`uvicorn backend.main:app`
 - [ ] 前端可启动：`npm run dev`（在 frontend 目录）

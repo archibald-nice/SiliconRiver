@@ -20,6 +20,18 @@ export const buildProviderAvatarUrl = (provider: string) => {
   return new URL(path, API_BASE_URL).toString();
 };
 
+/**
+ * 把后端路径拼成可直接请求的 URL。
+ * - API_BASE_URL 为空：返回相对路径（同域部署，如 Vercel Services 把 /api 路由到后端）
+ * - API_BASE_URL 有值：拼成绝对 URL（前后端分域部署）
+ */
+export const buildApiUrl = (path: string) => {
+  if (!API_BASE_URL) {
+    return path;
+  }
+  return new URL(path, API_BASE_URL).toString();
+};
+
 /** @deprecated 归档：模型列表视图已下线，接口保留以兼容历史用例。 */
 export interface ModelSummary {
   model_id: string;
@@ -80,6 +92,10 @@ export interface ModelAnalysis {
   llm_model_used?: string;
   analyzed_at?: string;
   tags: string[];
+  // 里程碑字段：与 backend/models.py 的 ModelAnalysis 对齐
+  is_milestone?: boolean;
+  milestone_features?: string | null;
+  updated_at?: string;
 }
 
 export interface AnalyzedModelsResponse {

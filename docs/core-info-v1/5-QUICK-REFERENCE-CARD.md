@@ -73,16 +73,16 @@ psql silicon_river < backup_20251110.sql
 
 ```bash
 # Hugging Face 全量同步
-python src/scraper/fetch_models.py
+python -m src.scraper.fetch_models
 
 # Hugging Face 增量同步（每日）
-python src/scraper/fetch_models_incr_day.py --limit 200
+python -m src.scraper.fetch_models_incr_day
 
 # OpenRouter 全量同步
-python src/scraper/fetch_models_openrouter.py
+python -m src.scraper.fetch_models_openrouter
 
 # OpenRouter 增量同步（每日）
-python src/scraper/fetch_models_openrouter_incr_day.py --limit 300
+python -m src.scraper.fetch_models_openrouter_incr_day
 
 # 更新排行榜缓存
 python scripts/update_leaderboards.py

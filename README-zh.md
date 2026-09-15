@@ -124,18 +124,28 @@ npm run dev        # http://localhost:5173
 
 根据需要选择全量或增量脚本。每次运行都会在 `sync_log` 表记录操作。启用 Brave Search 和排行榜 API 后，新模型会自动包含实时网络信息和多维度验证数据。
 
+> **注意两个坑**：
+> 1. 抓取脚本**必须用 `-m` 模块方式执行**。用 `python src/scraper/xxx.py` 直接按路径执行会报 `ModuleNotFoundError: No module named 'src'`，因为这些脚本内部用的是 `from src.scraper import ...` 这种包内导入。
+> 2. 抓取数量**不看命令行参数**，而是读 `.env` 里的 `HF_DAILY_FETCH_LIMIT` / `OPENROUTER_DAILY_FETCH_LIMIT`。写成 `--limit 200` 不会生效。
+
 ```bash
 # Hugging Face 全量同步
-python src/scraper/fetch_models.py
+python -m src.scraper.fetch_models
 
 # Hugging Face 每日增量（推荐）
-python src/scraper/fetch_models_incr_day.py --limit 200
+python -m src.scraper.fetch_models_incr_day
 
 # OpenRouter 全量同步
-python src/scraper/fetch_models_openrouter.py
+python -m src.scraper.fetch_models_openrouter
 
 # OpenRouter 每日增量
-python src/scraper/fetch_models_openrouter_incr_day.py --limit 300
+python -m src.scraper.fetch_models_openrouter_incr_day
+
+# 一键增量同步（Hugging Face + OpenRouter，适合挂到定时任务）
+bash scripts/daily_sync.sh
+
+# 数据库体检：确认表建好、数据到位
+python scripts/check_supabase.py
 
 # 更新排行榜缓存（建议每日运行）
 python scripts/update_leaderboards.py

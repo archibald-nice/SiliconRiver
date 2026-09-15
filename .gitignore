@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *.sqlite3-journal
@@ -20,6 +20,14 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 
+# TypeScript 构建产物（由 tsc -b 生成，不要提交）
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Vercel
+.vercel/
+
 # Builds / coverage
 htmlcov/
 .coverage
@@ -31,5 +39,3 @@ Thumbs.db
 
 # Claude Code settings (local machine specific)
 .claude/
-
-/docs

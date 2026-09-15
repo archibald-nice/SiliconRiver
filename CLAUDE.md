@@ -67,10 +67,10 @@ pytest                                       # 运行所有测试
 pytest tests/test_fetch_models.py::test_name  # 运行特定测试
 
 # 数据爬取
-python src/scraper/fetch_models.py           # Hugging Face 完整同步
-python src/scraper/fetch_models_incr_day.py --limit 200  # Hugging Face 增量同步
-python src/scraper/fetch_models_openrouter.py           # OpenRouter 完整同步
-python src/scraper/fetch_models_openrouter_incr_day.py --limit 300  # OpenRouter 增量同步
+python -m src.scraper.fetch_models           # Hugging Face 完整同步
+python -m src.scraper.fetch_models_incr_day  # Hugging Face 增量同步
+python -m src.scraper.fetch_models_openrouter           # OpenRouter 完整同步
+python -m src.scraper.fetch_models_openrouter_incr_day  # OpenRouter 增量同步
 ```
 
 ### 前端命令

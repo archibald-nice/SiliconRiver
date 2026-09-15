@@ -117,16 +117,16 @@ Run these scripts whenever you need to refresh the catalogue. Each command respe
 
 ```bash
 # Hugging Face (full sync)
-python src/scraper/fetch_models.py
+python -m src.scraper.fetch_models
 
 # Hugging Face (daily/partial)
-python src/scraper/fetch_models_incr_day.py --limit 200
+python -m src.scraper.fetch_models_incr_day
 
 # OpenRouter (full sync)
-python src/scraper/fetch_models_openrouter.py
+python -m src.scraper.fetch_models_openrouter
 
 # OpenRouter (daily/partial)
-python src/scraper/fetch_models_openrouter_incr_day.py --limit 300
+python -m src.scraper.fetch_models_openrouter_incr_day
 
 # Update leaderboard cache (recommended daily)
 python scripts/update_leaderboards.py

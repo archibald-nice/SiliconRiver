@@ -17,10 +17,17 @@ from fastapi.responses import Response
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict
 
-BASE_DIR = PathLib(__file__).resolve().parents[1]
-sys.path.insert(0, str(BASE_DIR))
+# 兼容两种运行布局，保证 `models` 在两种情况下都可被导入：
+#   1) 本地开发：从项目根执行 `uvicorn backend.main:app`
+#   2) Vercel Services：service root 设为 backend/，main.py 被当作顶层模块加载
+BACKEND_DIR = PathLib(__file__).resolve().parent
+PROJECT_ROOT = BACKEND_DIR.parent
 
-from backend.models import (
+for _search_path in (str(PROJECT_ROOT), str(BACKEND_DIR)):
+    if _search_path not in sys.path:
+        sys.path.insert(0, _search_path)
+
+from models import (
     Model,
     ModelList,
     ProviderStat,
@@ -34,20 +41,35 @@ from backend.models import (
     TimelineModelWithAnalysis,
 )
 
-ENV_PATH = BASE_DIR / ".env"
+ENV_PATH = PROJECT_ROOT / ".env"
 
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH, override=False)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://USER:PASSWORD@HOST:5432/silicon_river")
+# 数据库连接超时（秒）：数据库不可达时快速失败，不让请求挂到平台超时
+DB_CONNECT_TIMEOUT = float(os.getenv("DB_CONNECT_TIMEOUT", "10"))
 AVATAR_FETCH_TIMEOUT = float(os.getenv("AVATAR_FETCH_TIMEOUT", "6"))
 AVATAR_CACHE_TTL = int(os.getenv("AVATAR_CACHE_TTL", "86400"))
 AVATAR_MAX_BYTES = int(os.getenv("AVATAR_MAX_BYTES", "524288"))
 
 
 def get_connection() -> psycopg.Connection:
-    conn = psycopg.connect(DATABASE_URL)
-    return conn
+    """建立一个数据库连接。
+
+    两个刻意为之的参数：
+    - prepare_threshold=None：关闭 psycopg 的自动预编译。
+      psycopg3 默认对执行超过 5 次的语句做服务端预编译，但 Supabase 的
+      Transaction pooler（6543 端口，Supavisor/PgBouncer）不支持预编译语句，
+      开着会报 "prepared statement ... already exists" 之类的间歇性错误。
+      关掉之后 Session / Transaction 两种连接池模式都能用。
+    - connect_timeout：数据库不可达时快速失败，避免函数一直挂到平台超时。
+    """
+    return psycopg.connect(
+        DATABASE_URL,
+        prepare_threshold=None,
+        connect_timeout=DB_CONNECT_TIMEOUT,
+    )
 
 
 app = FastAPI(title="Silicon River API", version="0.1.0")
@@ -487,12 +509,16 @@ async def get_model_analysis(
                 ma.performance_metrics,
                 ma.llm_model_used,
                 ma.analyzed_at,
+                ma.is_milestone,
+                ma.milestone_features,
+                ma.updated_at,
                 array_agg(DISTINCT mt.tag) FILTER (WHERE mt.tag IS NOT NULL) as tags
             FROM model_analysis ma
             LEFT JOIN model_tags mt ON ma.model_id = mt.model_id
             WHERE ma.model_id = %s
             GROUP BY ma.id, ma.model_id, ma.analysis_summary, ma.key_features,
-                     ma.use_cases, ma.performance_metrics, ma.llm_model_used, ma.analyzed_at
+                     ma.use_cases, ma.performance_metrics, ma.llm_model_used, ma.analyzed_at,
+                     ma.is_milestone, ma.milestone_features, ma.updated_at
             """,
             [model_id],
         )
@@ -510,6 +536,9 @@ async def get_model_analysis(
         llm_model_used=row["llm_model_used"],
         analyzed_at=row["analyzed_at"],
         tags=list(filter(None, row["tags"] or [])),
+        is_milestone=bool(row["is_milestone"]),
+        milestone_features=row["milestone_features"],
+        updated_at=row["updated_at"],
     )
 
 
