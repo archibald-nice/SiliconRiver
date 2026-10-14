@@ -42,17 +42,30 @@ Silicon River 是一个交互式 3D 时间轴可视化系统，用于展示大�
 
 ```bash
 # 后端设置
-python -m venv .venv
+python -m venv .venv                         # 报 ensurepip 失败就用 uv venv .venv --python 3.12
 # Windows: .venv\Scripts\activate
 # Unix: source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt              # 抓取 + AI 分析侧
+pip install -r backend/requirements.txt      # API 侧（本地跑通需装两份）
 python scripts/init_db.py                    # 初始化数据库模式
 uvicorn backend.main:app --reload --port 8000
+
+# 本地数据库（不想装 PostgreSQL / Docker 时）
+bash scripts/dev_db.sh start                 # pgserver 自带二进制，数据在 /tmp
+
+# ⚠️ shell 里若配了 all_proxy，抓取脚本会挂，先 unset all_proxy ALL_PROXY
 
 # 前端设置（在新终端中）
 cd frontend
 npm install
 npm run dev                                  # 运行于 http://localhost:5173
+```
+
+### 测试
+
+```bash
+# 需要 TEST_DATABASE_URL（scripts/dev_db.sh start 会一并建好测试库）
+.venv/bin/python -m pytest tests/ -q
 ```
 
 ### 后端命令
@@ -112,11 +125,15 @@ npm run preview                             # 本地预览生产构建
 ### 前端组件层次
 
 ```text
-App (Timeline3D.tsx)
-├── TimelineFilters （过滤芯片、搜索输入）
-├── Timeline3D （Three.js 场景渲染）
-│   └── 使用 timeline/modes/ 进行可视化算法
-└── ModelCard （显示焦点模型元数据）
+App
+├── ThemeProvider
+└── HomeWithAnalysis （时间轴页，唯一的页面）
+    ├── MobileFilterButton / MobileFilterDrawer （移动端筛选）
+    ├── TimelineFilters （桌面端筛选芯片、搜索输入）
+    ├── ModeSwitcher （经典螺旋 / 河流巡航 / 星轨螺旋）
+    └── Timeline3D （Three.js 场景渲染）
+        ├── 使用 timeline/modes/ 的 ITimelineMode 实现
+        └── ModelAnalysisModal （点击节点后弹出的分析详情）
 ```
 
 ### 时间轴渲染管道
@@ -145,8 +162,10 @@ App (Timeline3D.tsx)
 | `HF_TOKEN` | Hugging Face API 认证（可选） | Token 字符串 |
 | `PROVIDERS` | 逗号分隔的 HF 组织机构待爬取 | `meta-llama,google,microsoft,openai` |
 | `PROVIDERS_OPENROUTER` | OpenRouter 提供商待包含 | `openai,anthropic,google` |
-| `VITE_API_BASE` | 前端 API 目标（默认 localhost:8000） | `http://localhost:8000` |
-| `TEST_DATABASE_URL` | 用于测试隔离的独立 PostgreSQL | `postgresql://user:pass@localhost:5433/silicon_river_test` |
+| `VITE_API_BASE` | 前端 API 目标。**默认留空**，走相对路径 `/api/*`；Vite 只认 `frontend/.env`，根目录的该项无效 | 留空 |
+| `ALLOWED_ORIGINS` | CORS 白名单（逗号分隔）。同域部署时无需改动 | `http://localhost:5173` |
+| `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | 连接池上下限（默认 0 / 4） | `0` / `4` |
+| `TEST_DATABASE_URL` | 用于测试隔离的独立 PostgreSQL | `postgresql://postgres@127.0.0.1:55432/silicon_river_test` |
 | `AVATAR_MAX_BYTES` | 提供商头像大小限制（默认 524KB） | `524288` |
 | `AVATAR_CACHE_TTL` | 浏览器缓存时长（秒）（默认 1 天） | `86400` |
 

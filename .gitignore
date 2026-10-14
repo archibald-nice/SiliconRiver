@@ -8,8 +8,9 @@ __pycache__/
 .env
 */.env
 .env.*
+# 模板文件要能提交（`*/.env` 与 `.env.*` 都会命中它们）
 !.env.example
-!.env.production.example
+!*/.env.example
 
 # Data artefacts
 /data/

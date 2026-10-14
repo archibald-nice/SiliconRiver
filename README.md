@@ -66,9 +66,16 @@ _中文文档请见 [README-zh.md](README-zh.md)。_
 python -m venv .venv
 .venv\Scripts\activate              # Windows
 # source .venv/bin/activate         # macOS/Linux
-pip install -r requirements.txt
+pip install -r requirements.txt           # scrapers + AI analysis
+pip install -r backend/requirements.txt   # FastAPI service (both are needed locally)
 python scripts/init_db.py           # create tables and indexes
 ```
+
+> If `python -m venv` fails with an `ensurepip` error (common on macOS, where `python3`
+> is a uv/pyenv-managed relocatable build), use `uv venv .venv --python 3.12` instead.
+>
+> No PostgreSQL at hand? `bash scripts/dev_db.sh start` brings up a local one from the
+> `pgserver` wheel inside `.venv` — no Homebrew or Docker required.
 
 Copy `.env.example` to `.env` and adjust the values described below. Start the API with:
 ```bash

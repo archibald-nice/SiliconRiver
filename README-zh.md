@@ -71,9 +71,16 @@ _English version available at [README.md](README.md)._
 python -m venv .venv
 .venv\Scripts\activate              # Windows
 # source .venv/bin/activate         # macOS/Linux
-pip install -r requirements.txt
+pip install -r requirements.txt           # 抓取 + AI 分析侧依赖
+pip install -r backend/requirements.txt   # FastAPI 服务侧依赖（本地跑通需要装两份）
 python scripts/init_db.py           # 初始化数据表和索引
 ```
+
+> 若 `python -m venv` 报 `ensurepip` 失败（macOS 上常见：`python3` 是 uv/pyenv 托管的
+> 可重定位构建），改用 `uv venv .venv --python 3.12`。
+>
+> 本机没有 PostgreSQL？`bash scripts/dev_db.sh start` 会用 `.venv` 里 pgserver 自带的
+> 二进制起一个本地库，不需要 Homebrew 或 Docker。
 
 将 `.env.example` 复制为 `.env`，按下表配置变量，然后启动 API 服务：
 
