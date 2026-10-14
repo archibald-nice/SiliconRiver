@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +34,18 @@ DEFAULT_DB_URL = "postgresql://USER:PASSWORD@HOST:5432/silicon_river"
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 HTTP_TIMEOUT = 15
 AVATAR_MAX_BYTES = int(os.getenv("AVATAR_MAX_BYTES", "524288"))
+
+# ---------- 模型简介 ----------
+# 为什么必须单独去拉 README：
+#   HF 已经把模型描述从卡片元数据里移除了。实测（huggingface_hub 0.35.3）：
+#   list_models(full=True) 返回的 cardData 是 null，ModelInfo 上连 description
+#   属性都没有；ModelCardData 现在只剩 license / library_name / pipeline_tag /
+#   datasets 这类结构化字段，没有 summary。full / cardData / expand 三种参数组合
+#   都试过，一律拿不到。简介现在只存在于仓库的 README.md 正文里。
+FETCH_DESCRIPTIONS = os.getenv("FETCH_DESCRIPTIONS", "true").lower() == "true"
+DESCRIPTION_CONCURRENCY = int(os.getenv("DESCRIPTION_CONCURRENCY", "8"))
+DESCRIPTION_TIMEOUT = float(os.getenv("DESCRIPTION_TIMEOUT", "10"))
+DESCRIPTION_MAX_CHARS = int(os.getenv("DESCRIPTION_MAX_CHARS", "300"))
 
 
 @dataclass(slots=True)
@@ -87,12 +101,195 @@ def format_timestamp(value: datetime | None) -> str:
     return normalise_datetime(value).strftime(TIMESTAMP_FORMAT)
 
 
-def to_record(provider: str, info: ModelInfo) -> ModelRecord:
-    card_data = getattr(info, "cardData", {}) or {}
-    description = card_data.get("summary") or card_data.get("description") or ""
-    fallback_description = getattr(info, "description", None)
-    if not description and fallback_description:
-        description = str(fallback_description)
+# ---------------------------------------------------------------------------
+# 从 README 抽简介
+# ---------------------------------------------------------------------------
+
+_FRONT_MATTER_END = re.compile(r"\n---[ \t]*(?:\n|$)")
+_HTML_TAG = re.compile(r"<[^>]+>")
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_MD_EMPHASIS = re.compile(r"[*_`~]+")
+_WHITESPACE = re.compile(r"\s+")
+
+# 一眼就不是正文的行：表格、分隔线、注释、列表项、引用、标题
+_NOT_PROSE_PREFIXES = ("|", "---", "===", "<!--", ">", "- ", "* ", "+ ", "#")
+
+
+def _clean_markdown_line(line: str) -> str:
+    """把一行 markdown 压成纯文本（去 HTML、图片、链接语法、强调符号）。"""
+    line = _HTML_TAG.sub(" ", line)
+    line = _MD_IMAGE.sub(" ", line)
+    line = _MD_LINK.sub(r"\1", line)
+    line = _MD_EMPHASIS.sub("", line)
+    return _WHITESPACE.sub(" ", line).strip()
+
+
+def extract_description_from_readme(
+    text: str | None,
+    max_chars: int = DESCRIPTION_MAX_CHARS,
+) -> str:
+    """从 README 正文里抽取第一段像样的文字作为简介。
+
+    模型卡的 README 通常长这样，所以按顺序跳过：
+        ---                 ← YAML front matter（license / tags 等）
+        ---
+        <div align="center">  ← HTML 容器
+        ![logo](...)          ← 徽章、图片
+        # 模型名               ← 标题
+        We introduce ...      ← 这才是要的那段
+
+    Args:
+        text: README.md 的完整内容
+        max_chars: 截断长度（数据库里 description 字段也按这个长度存）
+
+    Returns:
+        抽取到的简介；抽不到就返回空字符串（调用方据此判断失败）
+    """
+    if not text:
+        return ""
+
+    body = text.lstrip("\ufeff")
+    # 去掉 YAML front matter（必须成对出现的 --- 才算）
+    if body.startswith("---"):
+        match = _FRONT_MATTER_END.search(body)
+        if match:
+            body = body[match.end():]
+
+    for raw_line in body.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(_NOT_PROSE_PREFIXES):
+            continue
+        line = _clean_markdown_line(raw_line)
+        # 太短的不要：多半是被跳过的标题残留、单个人名、分隔符
+        if len(line) < 30:
+            continue
+        return line[:max_chars]
+
+    return ""
+
+
+def fetch_model_description(
+    model_id: str,
+    token: str | None = None,
+    timeout: float = DESCRIPTION_TIMEOUT,
+) -> str:
+    """拉取单个模型的 README.md 并抽取简介。任何失败都返回空字符串。"""
+    url = f"https://huggingface.co/{model_id}/raw/main/README.md"
+    headers = {"Accept": "text/plain", "User-Agent": "silicon-river/1.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+    except requests.RequestException as exc:
+        LOGGER.debug("README 拉取失败 %s: %s", model_id, exc)
+        return ""
+
+    if not response.ok:
+        # 没有 README 的仓库会 404，这是正常情况，不该刷 warning
+        LOGGER.debug("README 不可用 %s（HTTP %s）", model_id, response.status_code)
+        return ""
+
+    return extract_description_from_readme(response.text)
+
+
+def fetch_descriptions(
+    model_ids: Iterable[str],
+    token: str | None = None,
+) -> dict[str, str]:
+    """并发拉取一批模型的简介。
+
+    这是整个抓取流程里唯一会放大请求量的地方：每个模型一次请求。所以：
+    - 并发可配（DESCRIPTION_CONCURRENCY），默认 8；
+    - 单条失败只 debug 一行，不影响整批；
+    - 返回的字典只包含**成功拿到简介**的模型，调用方据此保留旧值。
+
+    Args:
+        model_ids: 需要拉取的模型 ID 列表
+        token: HF token（可选，有的话限速更宽松）
+
+    Returns:
+        {model_id: description}
+    """
+    ids = [mid for mid in model_ids if mid]
+    if not FETCH_DESCRIPTIONS:
+        LOGGER.info("FETCH_DESCRIPTIONS=false，跳过 README 拉取")
+        return {}
+    if not ids:
+        return {}
+
+    workers = max(1, DESCRIPTION_CONCURRENCY)
+    LOGGER.info("拉取 %s 个模型的 README 简介（并发 %s）", len(ids), workers)
+
+    found: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(fetch_model_description, mid, token): mid for mid in ids}
+        for done, future in enumerate(as_completed(futures), start=1):
+            model_id = futures[future]
+            try:
+                description = future.result()
+            except Exception as exc:  # pragma: no cover - 线程内异常兜底
+                LOGGER.debug("README 任务异常 %s: %s", model_id, exc)
+                description = ""
+            if description:
+                found[model_id] = description
+            if done % 50 == 0 or done == len(ids):
+                LOGGER.info("  README 进度 %s/%s（已拿到 %s 条）", done, len(ids), len(found))
+
+    LOGGER.info("README 完成：%s/%s 条拿到简介", len(found), len(ids))
+    return found
+
+
+def load_existing_descriptions(conn: psycopg.Connection, provider: str) -> dict[str, str]:
+    """读取该厂商下已有非空简介的模型，用于跳过重复拉取。
+
+    没有这个跳过，`daily_sync.sh` 每天都会为上千个老模型重拉一遍 README。
+    """
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT model_id, description
+                FROM models
+                WHERE provider = %s AND description IS NOT NULL AND description <> ''
+                """,
+                (provider,),
+            )
+            return {row[0]: row[1] for row in cursor.fetchall()}
+    except psycopg.Error as exc:  # pragma: no cover - 读失败就退回全量拉取
+        LOGGER.warning("读取已有 description 失败（本厂商将全量拉取）：%s", exc)
+        return {}
+
+
+def _description_from_card_data(info: ModelInfo) -> str:
+    """旧的提取路径，保底用。
+
+    实测当前 HF 一律返回空（cardData 为 null，且 ModelInfo 已无 description 属性），
+    但如果 HF 哪天把这两个字段加回来，走这条路比发一次 HTTP 便宜。
+    """
+    card_data = getattr(info, "cardData", None) or {}
+    description = ""
+    if isinstance(card_data, dict):
+        description = card_data.get("summary") or card_data.get("description") or ""
+    if not description:
+        fallback = getattr(info, "description", None)
+        if fallback:
+            description = str(fallback)
+    return str(description or "")
+
+
+def to_record(provider: str, info: ModelInfo, description: str | None = None) -> ModelRecord:
+    """把一个 HF ModelInfo 转成待入库的记录。
+
+    Args:
+        description: 已经拿到的简介（来自 README 或库里旧值）。传 None 时退回
+                     卡片元数据里找 —— 那条路目前恒为空，仅作保底。
+    """
+    if description is None:
+        description = _description_from_card_data(info)
     tags = list(getattr(info, "tags", []) or [])
     created_at = format_timestamp(getattr(info, "created_at", None) or getattr(info, "lastModified", None))
     inserted_at = format_timestamp(datetime.now(timezone.utc))
@@ -108,7 +305,7 @@ def to_record(provider: str, info: ModelInfo) -> ModelRecord:
         model_id=info.modelId,
         provider=provider,
         model_name=info.modelId.split("/")[-1],
-        description=(description or "")[:300],
+        description=(description or "")[:DESCRIPTION_MAX_CHARS],
         tags=tags,
         created_at=created_at,
         downloads=downloads,
@@ -456,8 +653,27 @@ def fetch_and_store(limit: int = 50) -> dict[str, tuple[int, int]]:
                 limit=limit,
                 full=True,
             )
+            # 必须先物化：拉 README 简介需要先拿到全部 model_id 才能并发
+            infos = list(models_iter)
+
+            # 只给「还没有简介」的模型拉 README。
+            #   首次抓取：492 个全拉；
+            #   后续 daily_sync：绝大多数已有简介，跳过，避免每天白跑上千次请求。
+            existing = load_existing_descriptions(conn, provider)
+            missing = [info.modelId for info in infos if not existing.get(info.modelId)]
+            if missing:
+                LOGGER.info(
+                    "Provider %s：%s 个模型需要拉简介（已有 %s 个可跳过）",
+                    provider, len(missing), len(infos) - len(missing),
+                )
+            fetched = fetch_descriptions(missing, token=token)
+            descriptions = {**existing, **fetched}
+
             started_at = datetime.now(timezone.utc)
-            records = (to_record(provider, info) for info in models_iter)
+            records = (
+                to_record(provider, info, description=descriptions.get(info.modelId))
+                for info in infos
+            )
             processed, inserted = save_models(conn, provider, records, started_at=started_at)
             LOGGER.info("Provider %s: processed=%s inserted=%s", provider, processed, inserted)
             results[provider] = (processed, inserted)
