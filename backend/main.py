@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathLib
 from typing import Dict, List, Optional
@@ -11,10 +13,11 @@ from typing import Dict, List, Optional
 import psycopg
 import httpx
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Path, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, ConfigDict
 
 # 兼容两种运行布局，保证 `models` 在两种情况下都可被导入：
@@ -53,23 +56,78 @@ AVATAR_FETCH_TIMEOUT = float(os.getenv("AVATAR_FETCH_TIMEOUT", "6"))
 AVATAR_CACHE_TTL = int(os.getenv("AVATAR_CACHE_TTL", "86400"))
 AVATAR_MAX_BYTES = int(os.getenv("AVATAR_MAX_BYTES", "524288"))
 
+# ---------- 数据库连接池参数 ----------
+# min_size=0：冷启动不抢连接，空闲时也不占着 Supabase 的连接配额。
+# max_size 刻意压得很小：Supabase 免费层连接数有限，而 serverless 的实例数会
+#   横向放大，池开大反而更容易把上游配额打满。需要时用环境变量调。
+DB_POOL_MIN_SIZE = int(os.getenv("DB_POOL_MIN_SIZE", "0"))
+DB_POOL_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "4"))
+# 空闲超过这个秒数就还给上游；Supabase 侧会掐掉长期空闲的连接。
+DB_POOL_MAX_IDLE = float(os.getenv("DB_POOL_MAX_IDLE", "300"))
+# 池里没有可用连接时，最多等这么久再报 PoolTimeout（而不是一直挂着）。
+DB_POOL_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "10"))
 
-def get_connection() -> psycopg.Connection:
-    """建立一个数据库连接。
+_pool: Optional[ConnectionPool] = None
+_pool_lock = threading.Lock()
 
-    两个刻意为之的参数：
-    - prepare_threshold=None：关闭 psycopg 的自动预编译。
-      psycopg3 默认对执行超过 5 次的语句做服务端预编译，但 Supabase 的
-      Transaction pooler（6543 端口，Supavisor/PgBouncer）不支持预编译语句，
-      开着会报 "prepared statement ... already exists" 之类的间歇性错误。
-      关掉之后 Session / Transaction 两种连接池模式都能用。
+
+def get_pool() -> ConnectionPool:
+    """返回进程级连接池，首次调用时惰性建立。
+
+    为什么需要池：原先每个请求都新建一条 psycopg 连接，等于每次都要走一遍
+    TCP + TLS + 认证。Supabase 是远程库，这部分是纯粹的固定开销；而 Vercel 的
+    Fluid compute 会在同一实例内复用进程，所以池能真正省下它。
+
+    传给 `kwargs` 的连接参数：
+    - prepare_threshold=None：关闭 psycopg 的自动预编译。psycopg3 默认对执行
+      超过 5 次的语句做服务端预编译，但 Supabase 的 Transaction pooler
+      （6543 端口，Supavisor/PgBouncer）不支持预编译语句，开着会报
+      "prepared statement ... already exists" 之类的间歇性错误。
     - connect_timeout：数据库不可达时快速失败，避免函数一直挂到平台超时。
     """
-    return psycopg.connect(
-        DATABASE_URL,
-        prepare_threshold=None,
-        connect_timeout=DB_CONNECT_TIMEOUT,
-    )
+    global _pool
+    if _pool is not None and not _pool.closed:
+        return _pool
+
+    with _pool_lock:
+        # 双重检查：可能已被另一个线程建好了
+        if _pool is None or _pool.closed:
+            _pool = ConnectionPool(
+                conninfo=DATABASE_URL,
+                min_size=DB_POOL_MIN_SIZE,
+                max_size=DB_POOL_MAX_SIZE,
+                max_idle=DB_POOL_MAX_IDLE,
+                timeout=DB_POOL_TIMEOUT,
+                kwargs={
+                    "prepare_threshold": None,
+                    "connect_timeout": DB_CONNECT_TIMEOUT,
+                },
+                open=False,
+                name="silicon-river",
+            )
+            # open() 本身不建连接（min_size=0），只是把维护线程和调度器起起来
+            _pool.open()
+    return _pool
+
+
+def close_pool() -> None:
+    """关闭连接池并清空模块级引用。"""
+    global _pool
+    with _pool_lock:
+        if _pool is not None and not _pool.closed:
+            _pool.close()
+        _pool = None
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """应用生命周期。
+
+    退出时关掉连接池：本地 `--reload` 和测试里的 TestClient 会反复启停应用，
+    不关的话连接会一路泄漏到 Supabase（空闲连接同样占配额）。
+    """
+    yield
+    close_pool()
 
 
 def _utcnow() -> datetime:
@@ -93,7 +151,7 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
-app = FastAPI(title="Silicon River API", version="0.1.0")
+app = FastAPI(title="Silicon River API", version="0.1.0", lifespan=lifespan)
 
 if ALLOWED_ORIGINS:
     app.add_middleware(
@@ -107,14 +165,15 @@ if ALLOWED_ORIGINS:
 def get_db():
     """数据库连接依赖。
 
-    刻意写成同步生成器：psycopg 是同步驱动，FastAPI 会把同步依赖和同步路由
-    一起丢进线程池执行；若写成 `async def`，连接会在事件循环里被阻塞建立。
+    两点刻意为之：
+    - 写成同步生成器：psycopg 是同步驱动，FastAPI 会把同步依赖和同步路由一起
+      丢进线程池执行；写成 `async def` 会让建连接阻塞事件循环。
+    - 用 `pool.connection()` 而不是 getconn/putconn：这个上下文管理器在正常退出时
+      **提交**、异常退出时**回滚**，并把连接（或坏掉的连接）归还池子，
+      不会把带未结事务的连接漏给下一个请求。
     """
-    conn = get_connection()
-    try:
+    with get_pool().connection() as conn:
         yield conn
-    finally:
-        conn.close()
 
 
 @app.get("/api/models", response_model=ModelList)

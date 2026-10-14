@@ -1,6 +1,10 @@
+# Vercel 只读 service root 下的这份依赖（root=backend/），
+# 因此「跑 API 需要什么」以这个文件为准。
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
 psycopg[binary]==3.2.2
+# 连接池：避免每个请求都重走一遍 TCP + TLS + 认证
+psycopg_pool==3.2.3
 python-dotenv==1.1.1
 httpx==0.28.1
