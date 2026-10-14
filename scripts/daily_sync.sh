@@ -50,6 +50,24 @@ if [[ ! -f "${PROJECT_ROOT}/.env" ]]; then
 fi
 log "[检查] .env OK"
 
+# ---------- 清理会打断 HTTP 客户端的代理变量 ----------
+# 两个实测会静默打死抓取/分析的坑（详见 docs/首次部署-从零到上线.md 的「代理污染」）：
+#  1) all_proxy=socks5://... → httpx/requests 去建 SOCKS transport，venv 里没有
+#     socksio → ImportError，表现为接口 500 / 抓取全挂。
+#     注意只摘 all_proxy，http_proxy 要留着（境外站点得靠它出去）。
+#  2) no_proxy 里的 "[::1]" → httpx 的 URL 解析器抛 InvalidURL: Invalid port ':1]'，
+#     连 OpenAI 客户端都建不起来（标签生成、AI 分析全部降级）。
+# 这两个变量是 shell 配置带进来的，脚本里清干净，避免无人值守时莫名其妙地失败。
+unset all_proxy ALL_PROXY
+if [[ "${no_proxy:-}" == *"[::1]"* ]]; then
+  no_proxy="${no_proxy//,\[::1\]/}"
+  no_proxy="${no_proxy//\[::1\],/}"
+  no_proxy="${no_proxy//\[::1\]/}"
+  export no_proxy
+  [[ -n "${NO_PROXY:-}" ]] && { NO_PROXY="$no_proxy"; export NO_PROXY; }
+  log "[清理] 已从 no_proxy 移除 [::1]（httpx 无法解析该写法）"
+fi
+
 if [[ ${DRY_RUN} -eq 1 ]]; then
   log "[dry-run] 环境检查通过，未执行抓取。"
   exit 0
