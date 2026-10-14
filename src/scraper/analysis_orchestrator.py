@@ -1,9 +1,12 @@
 """AI分析协调器 - 统一管理爬虫完成后的AI分析流程。"""
 from __future__ import annotations
 
+import argparse
+import asyncio
+import json
 import logging
 import os
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +33,10 @@ ANALYSIS_BATCH_SIZE = int(os.getenv("ANALYSIS_BATCH_SIZE", "10"))
 ANALYSIS_DELAY = float(os.getenv("ANALYSIS_DELAY_BETWEEN_BATCHES", "2.0"))
 ANALYSIS_LIMIT = int(os.getenv("ANALYSIS_LIMIT_PER_PROVIDER", "50"))
 
+# 失败率超过这个比例就认为整批分析出了问题（而不是个别模型抽不出结果），
+# 以非 0 退出，好让 systemd 的 OnFailure / 监控脚本能捕获。
+DEFAULT_MAX_FAILURE_RATE = float(os.getenv("ANALYSIS_MAX_FAILURE_RATE", "0.2"))
+
 
 class AnalysisOrchestrator:
     """协调爬虫和AI分析的整合。"""
@@ -43,11 +50,24 @@ class AnalysisOrchestrator:
         self.db_url = db_url or DEFAULT_DB_URL
         self.integration = AnalysisIntegration(db_url=self.db_url)
 
-    def run_post_scrape_analysis(self, provider: str | None = None) -> dict:
+    def run_post_scrape_analysis(
+        self,
+        provider: str | None = None,
+        limit: int | None = None,
+    ) -> dict:
         """在爬虫完成后运行AI分析。
+
+        这是一个**同步**入口（调用方都是同步的 CLI / 脚本），内部用 asyncio.run
+        驱动 `AnalysisIntegration.analyze_batch`。
+
+        ⚠️ 这里曾经漏了 await：直接拿 `async def analyze_batch` 的返回值（一个
+        coroutine 对象）去取下标，必然抛 TypeError: 'coroutine' object is not
+        subscriptable。而调用方（fetch_models 等）把它包在 try/except 里只打
+        warning，所以**一直静默失败** —— model_analysis 长期为空就是这么来的。
 
         Args:
             provider: 特定提供商（可选），如果为None则分析所有待分析的模型
+            limit: 本次最多分析多少个（覆盖 ANALYSIS_LIMIT_PER_PROVIDER）
 
         Returns:
             包含分析统计的结果字典
@@ -56,10 +76,14 @@ class AnalysisOrchestrator:
             LOGGER.info("AI分析功能已禁用")
             return {"enabled": False, "message": "AI分析功能已禁用"}
 
-        LOGGER.info("开始爬虫后分析流程 (provider=%s)", provider or "all")
+        LOGGER.info(
+            "开始爬虫后分析流程 (provider=%s, limit=%s)",
+            provider or "all",
+            limit if limit is not None else ANALYSIS_LIMIT,
+        )
 
         # 获取待分析的模型
-        models = self._fetch_unanalyzed_models(provider=provider)
+        models = self._fetch_unanalyzed_models(provider=provider, limit=limit)
 
         if not models:
             LOGGER.info("没有待分析的模型")
@@ -73,11 +97,15 @@ class AnalysisOrchestrator:
 
         LOGGER.info(f"找到 {len(models)} 个待分析的模型")
 
-        # 运行批量分析
-        results = self.integration.analyze_batch(
-            models=models,
-            batch_size=ANALYSIS_BATCH_SIZE,
-            delay_between_batches=ANALYSIS_DELAY,
+        # 运行批量分析。
+        # 必须是 asyncio.run(...)：analyze_batch 是协程，直接调用只会拿到
+        # coroutine 对象，既不执行也不报错，直到有人对它取下标才炸。
+        results = asyncio.run(
+            self.integration.analyze_batch(
+                models=models,
+                batch_size=ANALYSIS_BATCH_SIZE,
+                delay_between_batches=ANALYSIS_DELAY,
+            )
         )
 
         return {
@@ -88,11 +116,16 @@ class AnalysisOrchestrator:
             "failed": results["failed"],
         }
 
-    def _fetch_unanalyzed_models(self, provider: str | None = None) -> list[dict]:
+    def _fetch_unanalyzed_models(
+        self,
+        provider: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
         """从数据库获取待分析的模型。
 
         Args:
             provider: 特定提供商（可选）
+            limit: 最多取多少个；不传则用 ANALYSIS_LIMIT_PER_PROVIDER
 
         Returns:
             待分析的模型列表
@@ -117,7 +150,7 @@ class AnalysisOrchestrator:
 
                     # 按插入时间倒序排列，获取最新的模型
                     query += " ORDER BY m.inserted_at DESC LIMIT %s"
-                    params.append(ANALYSIS_LIMIT)
+                    params.append(limit if limit is not None else ANALYSIS_LIMIT)
 
                     cursor.execute(query, params)
 
@@ -306,20 +339,128 @@ class AnalysisOrchestrator:
             return {}
 
 
-def run_post_scrape_analysis(provider: str | None = None) -> dict:
+def run_post_scrape_analysis(
+    provider: str | None = None,
+    limit: int | None = None,
+) -> dict:
     """便捷函数：在爬虫完成后运行分析。
 
     Args:
         provider: 特定提供商（可选）
+        limit: 本次最多分析多少个；不传则用 ANALYSIS_LIMIT_PER_PROVIDER
 
     Returns:
         分析结果
     """
     orchestrator = AnalysisOrchestrator()
-    return orchestrator.run_post_scrape_analysis(provider=provider)
+    return orchestrator.run_post_scrape_analysis(provider=provider, limit=limit)
+
+
+def decide_exit_code(
+    result: dict,
+    max_failure_rate: float = DEFAULT_MAX_FAILURE_RATE,
+) -> tuple[int, str]:
+    """根据分析结果决定进程退出码，并给出一句话原因。
+
+    独立成纯函数是为了能直接单测 —— 定时任务能不能告警全靠它的判断。
+
+    判定规则（刻意不从简：小众模型抽不出结果是常态，不该天天告警）：
+      - 开关关着 / 没有待分析模型        → 0（不是失败，是没事做）
+      - 一个都没失败                     → 0
+      - **全部失败**                     → 1（几乎一定是环境问题：密钥失效、
+                                            网络不通、库连不上，跟模型数量无关）
+      - 失败率 > max_failure_rate        → 1
+      - 其余                             → 0（容忍少量个例）
+
+    Args:
+        result: run_post_scrape_analysis() 的返回值
+        max_failure_rate: 失败率阈值（0~1）
+
+    Returns:
+        (exit_code, 原因说明)
+    """
+    if not result.get("enabled", False):
+        return 0, "分析功能已禁用，跳过（不是失败）"
+
+    total = int(result.get("total") or 0)
+    failed = int(result.get("failed") or 0)
+
+    if total == 0:
+        return 0, "没有待分析的模型"
+
+    if failed == 0:
+        return 0, f"全部成功（{total}/{total}）"
+
+    failure_rate = failed / total
+
+    if failed == total:
+        return 1, (
+            f"全部失败（{failed}/{total}）—— 几乎一定是环境问题，"
+            "检查 DEEPSEEK_API_KEY、网络与数据库连通性"
+        )
+
+    if failure_rate > max_failure_rate:
+        return 1, (
+            f"失败率 {failure_rate:.1%} 超过阈值 {max_failure_rate:.0%}"
+            f"（{failed}/{total}）"
+        )
+
+    return 0, f"失败 {failed}/{total}（失败率 {failure_rate:.1%}，在容忍范围内）"
+
+
+def main(argv: list[str] | None = None) -> int:
+    """命令行入口：只做 AI 分析，不抓数据。
+
+    用法（在项目根目录执行）：
+        python -m src.scraper.analysis_orchestrator                # 分析所有待分析的
+        python -m src.scraper.analysis_orchestrator --limit 20     # 限量试跑
+        python -m src.scraper.analysis_orchestrator --provider Qwen
+        python -m src.scraper.analysis_orchestrator --max-failure-rate 0.5
+
+    退出码：
+        0  成功，或失败在容忍范围内
+        1  失败率超阈值，或全部失败（供 systemd OnFailure / 监控脚本捕获）
+        2  参数错误
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m src.scraper.analysis_orchestrator",
+        description="批量 AI 分析未分析的模型（不抓取数据）",
+    )
+    parser.add_argument("--provider", default=None, help="只分析指定厂商（如 Qwen）")
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="本次最多分析多少个，覆盖 ANALYSIS_LIMIT_PER_PROVIDER",
+    )
+    parser.add_argument(
+        "--max-failure-rate", type=float, default=DEFAULT_MAX_FAILURE_RATE,
+        help=f"失败率超过该比例即判定为失败（默认 {DEFAULT_MAX_FAILURE_RATE}）",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="额外输出一行 JSON 结果，便于监控脚本解析",
+    )
+    args = parser.parse_args(argv)
+
+    if args.limit is not None and args.limit <= 0:
+        parser.error("--limit 必须为正整数")
+
+    result = run_post_scrape_analysis(provider=args.provider, limit=args.limit)
+    exit_code, reason = decide_exit_code(result, max_failure_rate=args.max_failure_rate)
+
+    # 人能看懂的一行
+    print(
+        f"分析结果: total={result.get('total', 0)} "
+        f"analyzed={result.get('analyzed', 0)} failed={result.get('failed', 0)} "
+        f"| {reason}"
+    )
+    if args.json:
+        print(json.dumps({**result, "exit_code": exit_code, "reason": reason},
+                         ensure_ascii=False))
+
+    LOGGER.info("分析流程结束：exit_code=%s（%s）", exit_code, reason)
+    return exit_code
 
 
 if __name__ == "__main__":
-    # 示例：运行分析
-    result = run_post_scrape_analysis()
-    print(f"分析完成: {result}")
+    sys.exit(main())
+

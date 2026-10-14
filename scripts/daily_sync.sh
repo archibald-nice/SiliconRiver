@@ -69,6 +69,19 @@ if [[ "${no_proxy:-}" == *"[::1]"* ]]; then
   log "[清理] 已从 no_proxy 移除 [::1]（httpx 无法解析该写法）"
 fi
 
+# ---------- 本脚本只负责抓数据 ----------
+# AI 分析是**独立**的定时任务，入口是：
+#     python -m src.scraper.analysis_orchestrator
+# 这里显式关掉分析开关，两个原因：
+#   1. 两个增量脚本各自在结尾都会调一次分析 —— 开着的话每天会跑两遍；
+#   2. 更关键：分析失败在增量脚本里被 try/except 吞掉、只打一行 warning，
+#      进程退出码仍是 0。塞在这里等于把分析故障藏起来，监控永远看不到。
+# 想恢复"抓完顺手分析"的老行为，用 SILICON_RIVER_SYNC_WITH_ANALYSIS=1 调用本脚本。
+if [[ "${SILICON_RIVER_SYNC_WITH_ANALYSIS:-0}" != "1" ]]; then
+  export ENABLE_POST_SCRAPE_ANALYSIS=false
+  log "[设置] ENABLE_POST_SCRAPE_ANALYSIS=false（本脚本只抓数据；分析由独立任务负责）"
+fi
+
 if [[ ${DRY_RUN} -eq 1 ]]; then
   log "[dry-run] 环境检查通过，未执行抓取。"
   exit 0
