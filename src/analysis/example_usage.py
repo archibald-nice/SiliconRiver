@@ -62,8 +62,12 @@ def example_tag_generation():
         print("标签生成失败")
 
 
-def example_batch_analysis():
-    """示例：批量分析模型。"""
+async def example_batch_analysis():
+    """示例：批量分析模型。
+
+    注意这是 async 函数：`analyze_batch` 是协程，必须 await。
+    此前这里漏了 await，`results` 会是个 coroutine 对象，下一行取下标直接 TypeError。
+    """
     print("\n" + "=" * 50)
     print("示例 3: 批量分析模型")
     print("=" * 50)
@@ -86,7 +90,7 @@ def example_batch_analysis():
         },
     ]
 
-    results = integration.analyze_batch(models, batch_size=1, delay_between_batches=2)
+    results = await integration.analyze_batch(models, batch_size=1, delay_between_batches=2)
     print(f"批量分析结果:")
     print(f"  总数: {results['total']}")
     print(f"  成功: {results['succeeded']}")
@@ -118,9 +122,10 @@ if __name__ == "__main__":
     # 如果未配置，某些功能可能不可用
 
     # 运行示例（根据需要取消注释）
+    # 注意 example_batch_analysis 是 async 的，要这样跑：
+    #     import asyncio; asyncio.run(example_batch_analysis())
     # example_single_model_analysis()
     # example_tag_generation()
-    # example_batch_analysis()
     # example_fetch_analyzed()
 
     print("\n提示：")

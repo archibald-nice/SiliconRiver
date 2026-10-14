@@ -22,6 +22,17 @@ TEST_DB_URL = os.getenv("TEST_DATABASE_URL")
 if not TEST_DB_URL or psycopg is None or TestClient is None:
     pytest.skip("PostgreSQL tests require psycopg, fastapi[testclient], and TEST_DATABASE_URL", allow_module_level=True)
 
+# 光有 TEST_DATABASE_URL 不够，还要真的连得上。否则本机测试库没起时，
+# 本模块会抛 OperationalError 而不是跳过 —— 看起来像"代码坏了"。
+try:
+    with psycopg.connect(TEST_DB_URL, connect_timeout=3):
+        pass
+except psycopg.OperationalError as _exc:
+    pytest.skip(
+        f"测试库不可达，先跑 bash scripts/dev_db.sh start：{_exc}",
+        allow_module_level=True,
+    )
+
 
 def _make_model(model_id: str, *, created_at: datetime | None = None, tags=None, description: str = ""):
     # 默认发布时间必须相对「现在」。这个测试后面会用 preset="1y"（= 今年）查时间轴，

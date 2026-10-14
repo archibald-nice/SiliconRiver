@@ -53,6 +53,19 @@ def seeded_db(db_url: str) -> str:
 
     from scripts.init_db import create_schema
 
+    # 先探一下连通性，连不上就**跳过**而不是让几十个用例一起 ERROR。
+    # 这个场景会经常发生：.env 的 DATABASE_URL 指向 Supabase（生产），而
+    # TEST_DATABASE_URL 指向本机库；本机库没起时，之前每个用例都会抛
+    # OperationalError，看起来像"代码改坏了"，其实只是没跑 dev_db.sh start。
+    try:
+        with psycopg.connect(db_url, connect_timeout=3):
+            pass
+    except psycopg.OperationalError as exc:
+        pytest.skip(
+            f"测试库不可达：{exc}\n"
+            "  → 本地跑测试前先执行：bash scripts/dev_db.sh start"
+        )
+
     create_schema(db_url)
 
     with psycopg.connect(db_url, autocommit=True) as conn, conn.cursor() as cur:

@@ -42,7 +42,11 @@ class AnalysisIntegration:
         tags: list[str] | None = None,
         provider: str | None = None,
     ) -> bool:
-        """异步分析模型并保存分析结果到数据库。
+        """分析并保存**单个**模型。
+
+        这是 `analyze_batch` 的单元素便捷入口。刻意让它委托过去，而不是复刻一份
+        独立逻辑 —— 之前正是这个函数每次只传 `model_ids=[model_id]` 一个模型，
+        把 `AsyncModelAnalyzer` 里的 semaphore 废成了并发度 1。
 
         Args:
             model_id: 模型ID
@@ -54,37 +58,20 @@ class AnalysisIntegration:
         Returns:
             是否成功保存
         """
-        # 异步分析模型（使用异步上下文管理器）
-        async with self.analyzer as analyzer:
-            # 构建模型列表
-            analysis_results = await analyzer.analyze_batch(
-                model_ids=[model_id],
-                model_names=[model_name],
-                descriptions=[description],
-                tags_list=[tags or []],
-            )
-
-        if not analysis_results or not analysis_results[0]:
-            LOGGER.warning(f"模型分析失败，跳过数据库保存：{model_id}")
-            return False
-
-        analysis_result = analysis_results[0]
-
-        # 生成标签
-        generated_tags = self.tag_generator.generate_tags(
-            model_name=model_name,
-            description=description,
-            existing_tags=tags,
+        result = await self.analyze_batch(
+            [
+                {
+                    "model_id": model_id,
+                    "model_name": model_name,
+                    "description": description,
+                    "tags": tags or [],
+                    "provider": provider,
+                }
+            ],
+            batch_size=1,
+            delay_between_batches=0.0,
         )
-
-        # 保存到数据库
-        return self._save_analysis_to_db(
-            model_id=model_id,
-            model_name=model_name,
-            provider=provider,
-            analysis_result=analysis_result,
-            generated_tags=generated_tags or [],
-        )
+        return result["succeeded"] == 1
 
     def _save_analysis_to_db(
         self,
@@ -196,12 +183,28 @@ class AnalysisIntegration:
         batch_size: int = 10,
         delay_between_batches: float = 1.0,
     ) -> dict:
-        """异步批量分析模型。
+        """并发分析一批模型，然后串行写库。
+
+        两个阶段刻意分开，因为它们的瓶颈完全不同：
+
+        - **分析阶段（并发）**：整批一次性交给 `AsyncModelAnalyzer.analyze_batch`，
+          由它内部的 semaphore 把在途请求数限在 `MAX_CONCURRENT_ANALYSIS`。
+          这一步全是网络等待，并发度直接决定总耗时。
+        - **保存阶段（串行）**：`_save_analysis_to_db` 用的是同步 psycopg，并发写会
+          阻塞事件循环，也会把数据库连接数打上去，所以一个一个写。
+
+        历史坑：这个函数以前是 `for` 循环逐个调 `analyze_and_save_model`，而后者
+        每次只传一个模型给 `analyze_batch`，于是 semaphore 每次只保护 1 个任务 ——
+        `MAX_CONCURRENT_ANALYSIS` 配了等于没配，500 个模型要串行跑一小时。
+        现在改成一次性把整批交过去，那个配置才真正生效。
 
         Args:
-            models: 模型列表，每个元素为dict包含model_id, model_name, description, tags
-            batch_size: 批处理大小
-            delay_between_batches: 批次之间的延迟（秒）
+            models: 模型列表，每个元素是 dict，含
+                model_id / model_name / description / tags / provider
+            batch_size: 每写库多少个模型打印一次进度（会自动下限到 1）
+            delay_between_batches: 连续失败后的退避秒数。
+                注意：限流现在由 semaphore 负责，这里不再用作"批次间固定间隔"，
+                否则只会在写库阶段白白插进几百秒空转
 
         Returns:
             包含成功/失败统计的结果字典
@@ -216,32 +219,76 @@ class AnalysisIntegration:
             "errors": {},  # 按错误类型统计
         }
 
-        LOGGER.info(f"开始异步批量分析 {len(models)} 个模型（批大小: {batch_size}，批间延迟: {delay_between_batches}秒）")
+        if not models:
+            return results
 
+        batch_size = max(1, int(batch_size))
+        concurrency = getattr(self.analyzer, "max_concurrent", 1) or 1
+        LOGGER.info(
+            f"开始批量分析 {len(models)} 个模型"
+            f"（并发上限 {concurrency}；分两阶段：并发分析 → 串行写库）"
+        )
+
+        # ── 阶段 1：并发分析 ─────────────────────────────────────────────
+        async with self.analyzer as analyzer:
+            analysis_results = await analyzer.analyze_batch(
+                model_ids=[model.get("model_id") for model in models],
+                model_names=[model.get("model_name") for model in models],
+                descriptions=[model.get("description") for model in models],
+                tags_list=[model.get("tags") or [] for model in models],
+            )
+
+        # analyze_batch 内部用 gather(return_exceptions=True)，所以失败项可能是
+        # 异常对象；整批超时时它返回 [None] * n。两种情况都要能落到失败计数里。
+        if len(analysis_results) != len(models):
+            LOGGER.error(
+                f"分析结果数量与模型数量不一致（{len(analysis_results)} != {len(models)}），"
+                "缺失的按失败处理"
+            )
+
+        # ── 阶段 2：串行写库 ─────────────────────────────────────────────
         consecutive_failures = 0
         max_consecutive_failures = 5  # 连续失败5次后暂停
 
-        for i, model in enumerate(models):
-            try:
-                success = await self.analyze_and_save_model(
-                    model_id=model.get("model_id"),
-                    model_name=model.get("model_name"),
-                    description=model.get("description"),
-                    tags=model.get("tags", []),
-                    provider=model.get("provider"),
-                )
+        for i, model in enumerate(models, start=1):
+            model_id = model.get("model_id")
+            model_name = model.get("model_name")
+            analysis_result = analysis_results[i - 1] if i - 1 < len(analysis_results) else None
 
-                if success:
-                    results["succeeded"] += 1
-                    consecutive_failures = 0  # 重置连续失败计数
-                else:
+            try:
+                if isinstance(analysis_result, BaseException):
+                    # 把 gather 捕获到的异常重新抛出来，走下面的统一异常处理
+                    raise analysis_result
+
+                if analysis_result is None:
+                    LOGGER.warning(f"模型分析未返回结果，跳过数据库保存：{model_id}")
                     results["failed"] += 1
                     consecutive_failures += 1
+                else:
+                    # 生成标签
+                    generated_tags = self.tag_generator.generate_tags(
+                        model_name=model_name,
+                        description=model.get("description"),
+                        existing_tags=model.get("tags") or [],
+                    )
+
+                    if self._save_analysis_to_db(
+                        model_id=model_id,
+                        model_name=model_name,
+                        provider=model.get("provider"),
+                        analysis_result=analysis_result,
+                        generated_tags=generated_tags or [],
+                    ):
+                        results["succeeded"] += 1
+                        consecutive_failures = 0  # 重置连续失败计数
+                    else:
+                        results["failed"] += 1
+                        consecutive_failures += 1
 
             except Exception as e:
                 error_type = type(e).__name__
                 results["errors"][error_type] = results["errors"].get(error_type, 0) + 1
-                LOGGER.error(f"模型分析异常 {model.get('model_id')}: {error_type}: {e}")
+                LOGGER.error(f"模型分析异常 {model_id}: {error_type}: {e}")
                 results["failed"] += 1
                 consecutive_failures += 1
 
@@ -253,17 +300,14 @@ class AnalysisIntegration:
                 await asyncio.sleep(delay_between_batches * 2)
                 consecutive_failures = 0
 
-            # 每处理batch_size个模型后，等待一段时间
-            if (i + 1) % batch_size == 0:
-                progress = f"{i + 1}/{len(models)}"
-                success_rate = round(results['succeeded'] / (i + 1) * 100, 1) if i + 1 > 0 else 0
+            # 每处理 batch_size 个模型打印一次进度
+            if i % batch_size == 0 or i == len(models):
+                success_rate = round(results["succeeded"] / i * 100, 1)
                 LOGGER.info(
-                    f"已处理 {progress} 个模型，"
+                    f"已处理 {i}/{len(models)} 个模型，"
                     f"成功: {results['succeeded']}, 失败: {results['failed']}，"
                     f"成功率: {success_rate}%"
                 )
-                if i + 1 < len(models):
-                    await asyncio.sleep(delay_between_batches)
 
         LOGGER.info(
             f"批量分析完成 - 总计: {results['total']}, "
