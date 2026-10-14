@@ -158,6 +158,7 @@ bash scripts/daily_sync.sh [--dry-run]
 # 体检与自检
 .venv/bin/python scripts/check_supabase.py     # 库连通性 + 六张表行数（输出已脱敏密码）
 .venv/bin/python scripts/check_deepseek_api.py # DeepSeek 连通性
+.venv/bin/python scripts/find_duplicate_models.py   # 跨源重复模型扫描（只读）
 ```
 
 **同步与分析是分开的两个定时任务**，不要合并。原因见第 7.2 节。
@@ -333,7 +334,7 @@ SDK 会自己再拼一次 `/chat/completions`，填完整端点会导致**每个
   （控制台反复报 WebSocket 失败、改代码页面不刷新），
   把 `VITE_HMR_HOST` 指向**访问者实际使用的地址**，同样只能从 shell 传。
 
-### 6.3 `PROVIDERS_OPENROUTER` 是白名单过滤器
+### 6.3 `PROVIDERS_OPENROUTER` 是白名单过滤器（两个坑）
 
 代码语义（`fetch_models_openrouter.py`）：
 
@@ -342,9 +343,37 @@ if providers_filter and provider_key not in providers_filter:
     continue        # 非白名单 org 直接丢弃
 ```
 
-**留空 = 不过滤（全收）**。当前默认值只放行 `google,openai,anthropic` 三个 org，
-而其中两个与 `PROVIDERS` 重叠，所以 OpenRouter 这条线的**净增益极小**。
-（历史记录见 `docs/issues/`。）
+**留空 = 不过滤（全收）**。当前默认放行 **51 家**厂商。
+
+#### 坑 1：必须填「展示名」，不是 `model_id` 的 id 前缀
+
+`provider` 入库时取的是接口 `name` 字段里冒号前的部分（展示名），
+两者对很多厂商**并不一致**（已实测）：
+
+| id 前缀 | 实际入库的 provider key |
+|---|---|
+| `mistralai` | **`mistral`** |
+| `z-ai` | **`z.ai`** |
+| `x-ai` | **`spacexai`** |
+| `meta-llama` | **`meta`** |
+
+填错的表现是**该厂商一条都进不来，且不报错**。只有 `google` / `openai` /
+`anthropic` 这几家展示名与前缀恰好一致，所以这个坑很容易被掩盖。
+
+另有一类**解析降级**：部分条目 `name` 不含冒号（如 `Mistral Large 2407`、
+`Qwen2.5 72B Instruct`），`extract_provider()` 会回退成把**整个模型名**
+当 provider，产出 `mistral large 2407`、`sao10k` 这类伪 key。白名单不要收录它们。
+
+#### 坑 2：limit 在过滤**之前**截断
+
+```python
+raw_models = raw_models[:limit]        # 先截断
+for item in raw_models:
+    if provider_key not in providers_filter: continue   # 再过滤
+```
+
+所以 `OPENROUTER_DAILY_FETCH_LIMIT` **必须 ≥ OpenRouter 全量模型数**，
+否则排在后面的厂商会被整体挤掉，表现为「一条都没有」。当前设为 462。
 
 ---
 
@@ -568,9 +597,22 @@ interface ITimelineMode {
 - **排行榜评分链路断裂**：`model_arena_info` 无自动化数据源
   （落库是空壳 TODO，上游接口大面积失效，且有假数据兜底）。
   消费端静默显示为空。
-- **OpenRouter 抓取被白名单限制**：`PROVIDERS_OPENROUTER` 只放行 3 个 org，
-  其中两个与 HF 名单重叠，净增益极小；且它**不写 `sync_log`**，监控看不见。
+- **OpenRouter 的变体与跨源重复**：`:batch` 枚举变体（91 条）、`~` 路由变体（17 条）
+  会一起入库；同一模型还会被 HF 与 OpenRouter 各收一条，时间轴上出现两个节点。
+  实测 929 条记录里有 **126 组归一化名重复（多出 131 条冗余）**：
+  仅大小写不同 19 组、含变体后缀 87 组、其他 20 组。
+  ⚠️ **库层面无法判定一条记录来自哪个源**（provider 可能相同、model_id 可能完全相同），
+  所以合并必须人工判断。`models` 表也**没有 `source` 列**。
+  查重工具：`scripts/find_duplicate_models.py`（只读）。
 - **代理变量会打死分析链路**：`daily_sync.sh` 已处理，分析入口未处理。
+- **两个数据源的命名规则互相冲突**：同一家厂商在 HF 与 OpenRouter 侧可能存成
+  **两个 `provider` 键**（实测 `Qwen` 50 行 + `qwen` 40 行 → 前端筛选器出现两条
+  "Qwen"；`providers` 表里还有一条 `display_name='Qwen (Qwen)'`）。
+  另外 `model_name` 风格混杂：**441 条带 `厂商: ` 前缀**（OpenRouter 的 `name` 字段）、
+  488 条不带，且有 **4 家 provider 内部两种风格并存**。
+  改 `provider` / `model_name` 相关逻辑前先读 `docs/issues/005`。
+- **OpenRouter 不写审计日志**：`sync_log` 只被 HF 链路写入，
+  所以 OpenRouter 那条线的失败在监控里不可见（见 4.4 节）。
 
 > 注：`docs/` 目录被 `.gitignore` 忽略（内部文档，提交历史已清除），
 > 所以 clone 出来的仓库里没有它。**不要把 `docs/` 加回 git。**
