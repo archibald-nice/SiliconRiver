@@ -83,7 +83,7 @@ class TestLeaderboardAggregatorWithNewClients:
 
     def test_all_clients_initialized(self):
         """测试所有客户端已初始化。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         assert "swe_bench" in agg.clients
         assert "lmsys_arena" in agg.clients
@@ -93,7 +93,7 @@ class TestLeaderboardAggregatorWithNewClients:
     @pytest.mark.asyncio
     async def test_concurrent_fetch_multiple_leaderboards(self):
         """测试并发获取多个排行榜。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         # Mock 所有客户端返回数据
         with patch.object(agg.clients["swe_bench"], "fetch_leaderboard", new_callable=AsyncMock) as mock_swe:

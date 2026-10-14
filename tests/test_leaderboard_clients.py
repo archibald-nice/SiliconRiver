@@ -144,15 +144,27 @@ class TestLeaderboardAggregator:
 
     def test_aggregator_initialization(self):
         """测试聚合器初始化。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         assert "swe_bench" in agg.clients
         assert len(agg.clients) >= 1
 
+    def test_default_disables_live_lookup(self, monkeypatch):
+        """默认不建客户端：在线排行榜查询又慢又会回落假排名，不能默认开。
+
+        关掉后 get_model_ranks 必须立刻返回空列表，而不是去打扰上游。
+        """
+        monkeypatch.delenv("ENABLE_LEADERBOARD_LOOKUP", raising=False)
+        agg = LeaderboardAggregator()
+
+        assert agg.clients == {}
+        assert agg.enabled is False
+        assert asyncio.run(agg.get_model_ranks("GPT-4")) == []
+
     @pytest.mark.asyncio
     async def test_get_model_ranks_single_rank(self):
         """测试获取单个排名。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         # Mock SWE-bench 客户端
         mock_rank = {
@@ -182,7 +194,7 @@ class TestLeaderboardAggregator:
     @pytest.mark.asyncio
     async def test_get_model_ranks_empty(self):
         """测试未找到排名时返回空列表。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         with patch.object(
             agg.clients["swe_bench"], "fetch_leaderboard", new_callable=AsyncMock
@@ -199,7 +211,7 @@ class TestLeaderboardAggregator:
     @pytest.mark.asyncio
     async def test_update_cache(self):
         """测试缓存更新。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         with patch.object(
             agg.clients["swe_bench"], "fetch_leaderboard", new_callable=AsyncMock
@@ -213,7 +225,7 @@ class TestLeaderboardAggregator:
 
     def test_clear_cache_all(self):
         """测试清空所有缓存。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         # 添加一些缓存数据
         agg.clients["swe_bench"].cache = {"bash-only": [{"model": "test"}]}
@@ -225,7 +237,7 @@ class TestLeaderboardAggregator:
 
     def test_clear_cache_specific(self):
         """测试清空特定客户端的缓存。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         # 添加一些缓存数据
         agg.clients["swe_bench"].cache = {"bash-only": [{"model": "test"}]}
@@ -237,7 +249,7 @@ class TestLeaderboardAggregator:
 
     def test_get_cache_stats(self):
         """测试获取缓存统计。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         # 添加一些缓存数据
         agg.clients["swe_bench"].cache = {
@@ -258,7 +270,7 @@ class TestLeaderboardIntegration:
     @pytest.mark.asyncio
     async def test_end_to_end_model_ranking(self):
         """测试端到端的模型排名获取。"""
-        agg = LeaderboardAggregator()
+        agg = LeaderboardAggregator(enabled=True)
 
         # Mock 完整的数据流
         mock_leaderboard_data = {
