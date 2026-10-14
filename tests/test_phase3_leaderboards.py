@@ -21,7 +21,11 @@ class TestLMSYSArenaClient:
         client = LMSYSArenaLeaderboardClient()
 
         assert client._normalize_lmsys_name("GPT-4-Turbo") == "gpt-4"
-        assert client._normalize_lmsys_name("Claude-3-Opus") == "claude-3"
+        # 原断言期望 "claude-3"，但那与实现意图不符，也与 LMSYS 实际数据不符：
+        # _normalize_lmsys_name 只剥离 -turbo / -ultra / -latest 这类**版本后缀**，
+        # 不剥离 -opus / -sonnet / -haiku 这类**型号后缀**——因为 claude-3 与
+        # claude-3-opus 是两个 Elo 分数不同的模型，归一会直接算错排名。
+        assert client._normalize_lmsys_name("Claude-3-Opus") == "claude-3-opus"
         assert client._normalize_lmsys_name("openai/GPT-4") == "gpt-4"
 
     def test_find_model_rank(self):

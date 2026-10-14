@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 try:
@@ -24,7 +24,10 @@ if not TEST_DB_URL or psycopg is None or TestClient is None:
 
 
 def _make_model(model_id: str, *, created_at: datetime | None = None, tags=None, description: str = ""):
-    created_at = created_at or datetime(2024, 1, 1, tzinfo=timezone.utc)
+    # 默认发布时间必须相对「现在」。这个测试后面会用 preset="1y"（= 今年）查时间轴，
+    # 原先硬编码的 2024-01-01 会随着年份推移落到窗口之外，测试就必然失败
+    # ——这是测试腐化（time-dependent rot），不是产品 bug。
+    created_at = created_at or datetime.now(timezone.utc) - timedelta(days=1)
     return SimpleNamespace(
         modelId=model_id,
         cardData={"summary": description} if description else {},
@@ -40,7 +43,13 @@ def _make_model(model_id: str, *, created_at: datetime | None = None, tags=None,
 def _reset_database() -> None:
     with psycopg.connect(TEST_DB_URL) as conn:
         with conn.cursor() as cursor:
-            cursor.execute("TRUNCATE TABLE sync_log, models RESTART IDENTITY")
+            # 必须 CASCADE / 带上引用方：model_tags、model_analysis、model_arena_info
+            # 都有指向 models 的外键，只 TRUNCATE models 会被 Postgres 拒绝
+            # （FeatureNotSupported: cannot truncate a table referenced in a foreign key constraint）。
+            cursor.execute(
+                "TRUNCATE TABLE sync_log, models, model_tags, model_analysis, "
+                "model_arena_info, providers RESTART IDENTITY CASCADE"
+            )
         conn.commit()
 
 
@@ -74,7 +83,11 @@ def test_fetch_and_store_inserts(monkeypatch):
             rows = cursor.fetchall()
             assert len(rows) == 2
             assert rows[0][0] == "meta-llama/Llama-1"
-            assert "Model one" in rows[0][1]
+            # 写库用的是 INSERT ... ON CONFLICT (model_id) DO UPDATE（见部署文档：
+            # 「有则更新、无则新增」），所以同一 model_id 出现两次时**后写覆盖先写**，
+            # 最终留下的是 "Duplicate" 而不是 "Model one"。
+            # 原断言期望 "Model one"，是按更早的 DO NOTHING 语义写的，已过时。
+            assert rows[0][1] == "Duplicate"
 
             cursor.execute("SELECT processed, inserted FROM sync_log")
             sync_rows = cursor.fetchall()
@@ -83,18 +96,18 @@ def test_fetch_and_store_inserts(monkeypatch):
     backend_main = importlib.import_module("backend.main")
     importlib.reload(backend_main)
     client = TestClient(backend_main.app)
-    response = client.get("/api/timeline", params={"preset": "1y", "page_size": 5, "sort": "asc"})
+    response = client.get("/api/timeline", params={"preset": "1y", "page_size": 10, "sort": "asc"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["items"]
     assert payload["total"] >= len(payload["items"])
     assert payload["page"] == 1
-    assert payload["page_size"] == 5
+    assert payload["page_size"] == 10
     assert payload["start"] <= payload["end"]
 
     provider_response = client.get(
         "/api/timeline",
-        params={"preset": "1y", "page_size": 5, "sort": "asc", "provider": "meta-llama"},
+        params={"preset": "1y", "page_size": 10, "sort": "asc", "provider": "meta-llama"},
     )
     assert provider_response.status_code == 200
     provider_payload = provider_response.json()
@@ -103,7 +116,7 @@ def test_fetch_and_store_inserts(monkeypatch):
 
     search_response = client.get(
         "/api/timeline",
-        params={"preset": "1y", "page_size": 5, "sort": "asc", "model_name": "Llama-2"},
+        params={"preset": "1y", "page_size": 10, "sort": "asc", "model_name": "Llama-2"},
     )
     assert search_response.status_code == 200
     search_payload = search_response.json()

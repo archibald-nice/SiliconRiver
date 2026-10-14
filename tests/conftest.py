@@ -1,0 +1,127 @@
+"""pytest 共享配置。
+
+两个原则：
+1. 需要数据库的测试自己声明依赖（`db_client`），没配 TEST_DATABASE_URL 就跳过，
+   不要让整个 tests/ 目录一起被 skip 掉。
+2. 测试库会被**清空重建**，所以只允许指向名字里带 test 的库，防止误删开发库。
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_PATH = PROJECT_ROOT / ".env"
+
+# 复用项目自己的 .env（里面已经配好本地开发库）
+if ENV_PATH.exists():
+    load_dotenv(dotenv_path=ENV_PATH, override=False)
+
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+
+requires_db = pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="需要 TEST_DATABASE_URL（见 .env，本地用 scripts/dev_db.sh start 起库）",
+)
+
+
+def _assert_safe_test_db(url: str) -> None:
+    """防止把测试指向开发库或生产库后被清表。"""
+    name = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+    if "test" not in name.lower():
+        raise RuntimeError(
+            f"拒绝对疑似非测试库执行清表：{url!r}。"
+            "数据库名里必须含 'test' 才能跑这些测试。"
+        )
+
+
+@pytest.fixture(scope="session")
+def db_url() -> str:
+    if not TEST_DATABASE_URL:
+        pytest.skip("需要 TEST_DATABASE_URL")
+    _assert_safe_test_db(TEST_DATABASE_URL)
+    return TEST_DATABASE_URL
+
+
+@pytest.fixture(scope="session")
+def seeded_db(db_url: str) -> str:
+    """建表并塞入一批确定性的样本数据，供路由行为测试使用。"""
+    import psycopg
+
+    from scripts.init_db import create_schema
+
+    create_schema(db_url)
+
+    with psycopg.connect(db_url, autocommit=True) as conn, conn.cursor() as cur:
+        # 清表：顺序照顾外键（model_tags / model_arena_info -> models）
+        cur.execute(
+            "TRUNCATE model_tags, model_arena_info, model_analysis, sync_log, models, providers "
+            "RESTART IDENTITY CASCADE"
+        )
+
+        cur.execute(
+            """
+            INSERT INTO providers (provider_id, display_name, avatar_url)
+            VALUES ('acme', 'Acme', NULL), ('globex', 'Globex', NULL)
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO models
+                (model_id, provider, model_name, description, tags, created_at,
+                 downloads, likes, model_card_url, inserted_at, is_open_source,
+                 price, huggingface_rank)
+            VALUES
+                ('acme/alpha-1', 'acme', 'Alpha 1', 'first model', '["llm"]',
+                 '2024-01-15 00:00:00', 100, 10, 'https://example.com/a1',
+                 '2024-01-15 00:00:00', TRUE, NULL, 1),
+                ('acme/beta-2', 'acme', 'Beta 2', 'second model', '["llm","vision"]',
+                 '2024-06-20 00:00:00', 200, 20, 'https://example.com/b2',
+                 '2024-06-20 00:00:00', FALSE, NULL, 2),
+                ('globex/gamma-3', 'globex', 'Gamma 3', 'third model', '["vision"]',
+                 '2025-03-05 00:00:00', 300, 30, 'https://example.com/g3',
+                 '2025-03-05 00:00:00', TRUE, NULL, 3)
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO model_tags (model_id, tag) VALUES
+                ('acme/alpha-1', 'llm'), ('acme/beta-2', 'llm'),
+                ('acme/beta-2', 'vision'), ('globex/gamma-3', 'vision')
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO model_analysis
+                (model_id, provider, model_name, analysis_summary, key_features,
+                 use_cases, llm_model_used, is_milestone, milestone_features)
+            VALUES
+                ('acme/alpha-1', 'acme', 'Alpha 1', 'a summary',
+                 ARRAY['fast'], ARRAY['chat'], 'deepseek-chat', TRUE, 'first')
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO model_arena_info (model_id, source, rank, score, category)
+            VALUES
+                ('acme/alpha-1', 'swe-bench', 3, 71.2, 'overall'),
+                ('acme/alpha-1', 'lmsys', 5, 1200.5, 'overall')
+            """
+        )
+
+    return db_url
+
+
+@pytest.fixture()
+def client(seeded_db: str, monkeypatch: pytest.MonkeyPatch):
+    """指向测试库的 TestClient。"""
+    from fastapi.testclient import TestClient
+
+    import backend.main as main
+
+    monkeypatch.setattr(main, "DATABASE_URL", seeded_db)
+    with TestClient(main.app, raise_server_exceptions=False) as test_client:
+        yield test_client

@@ -1,4 +1,4 @@
-﻿"""Fetch Hugging Face models and persist them into PostgreSQL."""
+"""Fetch Hugging Face models and persist them into PostgreSQL."""
 from __future__ import annotations
 
 import json
@@ -373,6 +373,7 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     is_open_source = EXCLUDED.is_open_source,
                     price = COALESCE(EXCLUDED.price, models.price),
                     huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank)
+                RETURNING (xmax = 0) AS is_insert
                 """,
                 (
                     record.model_id,
@@ -390,7 +391,11 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     record.huggingface_rank,
                 ),
             )
-            inserted_row = cursor.rowcount
+            # 不能用 cursor.rowcount：ON CONFLICT DO UPDATE 下它无论新增还是更新都是 1，
+            # 会把「更新」也算成「新增」，污染 sync_log 审计表。
+            # xmax = 0 表示这一行是本次 INSERT 产生的（新行），否则是被 UPDATE 的旧行。
+            inserted_row = cursor.fetchone()
+            is_insert = bool(inserted_row and inserted_row[0])
             cursor.execute("DELETE FROM model_tags WHERE model_id = %s", (record.model_id,))
             if record.tags:
                 tag_rows = [
@@ -405,7 +410,7 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     """,
                     tag_rows,
                 )
-            if inserted_row:
+            if is_insert:
                 inserted += 1
         finished_at = datetime.now(timezone.utc)
         cursor.execute(

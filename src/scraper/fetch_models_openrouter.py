@@ -170,6 +170,7 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     price = COALESCE(EXCLUDED.price, models.price),
                     is_open_source = EXCLUDED.is_open_source,
                     huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank)
+                RETURNING (xmax = 0) AS is_insert
                 """,
                 (
                     record.model_id,
@@ -187,7 +188,10 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     record.huggingface_rank,
                 ),
             )
-            if cursor.rowcount:
+            # 同 fetch_models.py：rowcount 在 ON CONFLICT DO UPDATE 下恒为 1，
+            # 会把更新误计成新增。xmax = 0 才是「这一行是本次新插入的」。
+            row = cursor.fetchone()
+            if row and row[0]:
                 inserted += 1
     conn.commit()
     return processed, inserted

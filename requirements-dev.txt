@@ -1,0 +1,21 @@
+# ============================================================
+# Silicon River · 本地开发依赖
+#
+# 为什么需要这个文件：
+#   根目录 requirements.txt 是「抓取 + AI 分析」侧依赖，
+#   backend/requirements.txt 是「API」侧依赖，两边都必须装才能
+#   在本机跑通全链路。这里把两份合并，外加仅开发才用的工具。
+#
+#   uv pip install -r requirements-dev.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 注意：不要用 `python3 -m venv` 建虚拟环境。本机 ~/.local/bin/python3
+#      是 uv 托管的可重定位构建，venv 建出来没有 pip。用：
+#        uv venv .venv --python 3.12
+# ============================================================
+
+-r requirements.txt
+-r backend/requirements.txt
+
+# 本地开发数据库：自带 PostgreSQL 16 二进制，装在 .venv 内，
+# 不需要 Homebrew / Docker。启停见 scripts/dev_db.sh
+pgserver==0.1.4

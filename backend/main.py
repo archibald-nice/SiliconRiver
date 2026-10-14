@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathLib
 from typing import Dict, List, Optional
 
@@ -72,16 +72,44 @@ def get_connection() -> psycopg.Connection:
     )
 
 
+def _utcnow() -> datetime:
+    """UTC「现在」，返回 naive datetime。
+
+    刻意剥掉 tzinfo：models.created_at 列是 `timestamp without time zone`，
+    若传入带时区的值，Postgres 会按会话时区换算后再落库，导致时间轴窗口边界偏移。
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+# 生产环境是 Vercel Services 同域部署：前端用自己的域名发相对路径 /api/*，
+# 由 vercel.json 的 rewrites 转到后端 service，浏览器根本不产生跨域请求。
+# 所以这里只需要放行本地开发地址；需要别的来源就用 ALLOWED_ORIGINS 覆盖（逗号分隔）。
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+
 app = FastAPI(title="Silicon River API", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+if ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 
-async def get_db():
+def get_db():
+    """数据库连接依赖。
+
+    刻意写成同步生成器：psycopg 是同步驱动，FastAPI 会把同步依赖和同步路由
+    一起丢进线程池执行；若写成 `async def`，连接会在事件循环里被阻塞建立。
+    """
     conn = get_connection()
     try:
         yield conn
@@ -90,7 +118,7 @@ async def get_db():
 
 
 @app.get("/api/models", response_model=ModelList)
-async def list_models(
+def list_models(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     provider: Optional[str] = None,
@@ -150,7 +178,7 @@ async def list_models(
 
 
 @app.get("/api/models/analyzed", response_model=AnalysisList)
-async def list_analyzed_models(
+def list_analyzed_models(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     provider: Optional[str] = None,
@@ -234,40 +262,13 @@ async def list_analyzed_models(
     return AnalysisList(items=items, total=total, page=page, page_size=page_size)
 
 
-@app.get("/api/models/{model_id:path}", response_model=Model)
-async def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
-    with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """
-            SELECT model_id, provider, model_name, description, tags, created_at, downloads, likes, model_card_url
-            FROM models
-            WHERE model_id = %s
-            """,
-            [model_id],
-        )
-        row = cursor.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Model not found")
-    return Model(
-        model_id=row["model_id"],
-        provider=row["provider"],
-        model_name=row["model_name"],
-        description=row["description"],
-        tags=_parse_tags(row["tags"]),
-        created_at=row["created_at"],
-        downloads=row["downloads"],
-        likes=row["likes"],
-        model_card_url=row["model_card_url"],
-    )
-
-
 @app.get("/api/timeline", response_model=TimelineResponse)
-async def timeline_models(
-    preset: str = Query("30d", regex="^(30d|6m|1y|all)"),
+def timeline_models(
+    preset: str = Query("30d", pattern="^(30d|6m|1y|all)$"),
     year: Optional[int] = Query(None, ge=1900, le=3000),
     page: int = Query(1, ge=1),
     page_size: int = Query(200, ge=10, le=500),
-    sort: str = Query("asc", regex="^(asc|desc)"),
+    sort: str = Query("asc", pattern="^(asc|desc)$"),
     provider: Optional[str] = Query(None),
     model_name: Optional[str] = Query(None),
     open_source: Optional[bool] = Query(None),
@@ -368,7 +369,7 @@ async def timeline_models(
 
 
 @app.get("/api/stats/providers", response_model=List[ProviderStat])
-async def provider_stats(conn: psycopg.Connection = Depends(get_db)):
+def provider_stats(conn: psycopg.Connection = Depends(get_db)):
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
@@ -384,6 +385,10 @@ async def provider_stats(conn: psycopg.Connection = Depends(get_db)):
 
 @app.get("/api/providers/{provider_id}/avatar")
 async def provider_avatar(provider_id: str, conn: psycopg.Connection = Depends(get_db)):
+    """按需缓存并回传厂商头像。
+
+    这是唯一的 async 路由：需要 await 上游 HTTP 请求。
+    """
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             "SELECT avatar_blob, avatar_mime, avatar_url FROM providers WHERE provider_id = %s",
@@ -421,8 +426,8 @@ async def provider_avatar(provider_id: str, conn: psycopg.Connection = Depends(g
         raise HTTPException(status_code=upstream.status_code, detail="Avatar fetch error")
 
     content = upstream.content
+    content_type = upstream.headers.get("content-type", "image/png")
     if len(content) <= AVATAR_MAX_BYTES:
-        content_type = upstream.headers.get("content-type", "image/png")
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
@@ -436,8 +441,6 @@ async def provider_avatar(provider_id: str, conn: psycopg.Connection = Depends(g
             conn.commit()
         except Exception:  # pragma: no cover - cache write failure
             conn.rollback()
-    else:
-        content_type = upstream.headers.get("content-type", "image/png")
 
     headers = {"Cache-Control": f"public, max-age={AVATAR_CACHE_TTL}"}
     for header in ("ETag", "Last-Modified"):
@@ -449,7 +452,7 @@ async def provider_avatar(provider_id: str, conn: psycopg.Connection = Depends(g
 
 
 def _calculate_timeline_window(preset: str, year: Optional[int]) -> tuple[datetime, datetime, str]:
-    now = datetime.utcnow()
+    now = _utcnow()
     if year is not None:
         start_dt = datetime(year, 1, 1)
         end_dt = datetime(year, 12, 31, 23, 59, 59)
@@ -487,11 +490,14 @@ def _parse_tags(raw: Optional[str]) -> List[str]:
 
 class ModelIdRequest(BaseModel):
     """请求体：包含模型ID"""
+    # 不声明会触发 pydantic 的 protected namespace "model_" 警告
+    model_config = ConfigDict(protected_namespaces=())
+
     model_id: str
 
 
 @app.post("/api/models/analysis", response_model=ModelAnalysis)
-async def get_model_analysis(
+def get_model_analysis(
     request: ModelIdRequest,
     conn: psycopg.Connection = Depends(get_db)
 ):
@@ -543,7 +549,7 @@ async def get_model_analysis(
 
 
 @app.get("/api/analysis/stats", response_model=AnalysisStats)
-async def get_analysis_stats(
+def get_analysis_stats(
     provider: Optional[str] = None,
     conn: psycopg.Connection = Depends(get_db),
 ):
@@ -581,7 +587,7 @@ async def get_analysis_stats(
 
 
 @app.get("/api/analysis/tags")
-async def get_analysis_tags(conn: psycopg.Connection = Depends(get_db)):
+def get_analysis_tags(conn: psycopg.Connection = Depends(get_db)):
     """获取所有可用的分析标签。"""
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
@@ -598,12 +604,11 @@ async def get_analysis_tags(conn: psycopg.Connection = Depends(get_db)):
     return {"tags": tags}
 
 
-@app.get("/api/arena/scores/{model_id}")
-async def get_model_arena_scores(
-    model_id: str = Path(..., description="模型ID"),
-    conn: psycopg.Connection = Depends(get_db),
-) -> ArenaScoreSummary:
-    """获取模型的行业评分信息。"""
+def _fetch_arena_summary(conn: psycopg.Connection, model_id: str) -> ArenaScoreSummary:
+    """查询单个模型的行业评分，汇总为 ArenaScoreSummary。
+
+    抽成普通函数是为了让两个同步路由共用，不需要在事件循环里 await。
+    """
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
@@ -619,7 +624,6 @@ async def get_model_arena_scores(
     if not rows:
         return ArenaScoreSummary(model_id=model_id, has_score=False)
 
-    # 构建评分信息
     details = [
         ArenaScoreInfo(
             model_id=row["model_id"],
@@ -639,6 +643,7 @@ async def get_model_arena_scores(
     sources = list(set(d.source for d in details))
 
     return ArenaScoreSummary(
+        model_id=model_id,
         has_score=True,
         sources=sources,
         combined_score=combined_score,
@@ -646,12 +651,29 @@ async def get_model_arena_scores(
     )
 
 
-@app.get("/api/models/{model_id}/analysis-with-scores")
-async def get_model_analysis_with_scores(
+# 用 {model_id:path} 而不是 {model_id}：真实的 model_id 形如 "provider/model-name"，
+# 默认的字符串转换器不匹配斜杠，原来的写法对任何真实 ID 都只能返回 404。
+@app.get("/api/arena/scores/{model_id:path}")
+def get_model_arena_scores(
     model_id: str = Path(..., description="模型ID"),
     conn: psycopg.Connection = Depends(get_db),
-) -> TimelineModelWithAnalysis | None:
+) -> ArenaScoreSummary:
+    """获取模型的行业评分信息。"""
+    return _fetch_arena_summary(conn, model_id)
+
+
+# 为什么用 POST 而不是 GET /api/models/{model_id}/analysis-with-scores：
+# 真实 model_id 形如 "provider/model-name"，含斜杠。默认的字符串转换器不匹配斜杠，
+# 写成 {model_id} 匹配不到任何真实 ID；写成 {model_id:path} 又会被后面的兜底路由
+# 或贪婪回溯搅乱。项目里 /api/models/analysis 已经为同一个根因采用 POST + 请求体，
+# 这里沿用同一约定。
+@app.post("/api/models/analysis-with-scores")
+def get_model_analysis_with_scores(
+    request: ModelIdRequest,
+    conn: psycopg.Connection = Depends(get_db),
+) -> TimelineModelWithAnalysis:
     """获取模型的完整分析数据（包括里程碑信息和评分）。"""
+    model_id = request.model_id
     with conn.cursor(row_factory=dict_row) as cursor:
         # 查询基础模型信息
         cursor.execute(
@@ -669,12 +691,11 @@ async def get_model_analysis_with_scores(
         row = cursor.fetchone()
 
     if not row:
-        return None
+        raise HTTPException(status_code=404, detail="Model not found")
 
     # 获取评分信息
-    score_summary = await get_model_arena_scores(model_id, conn)
+    score_summary = _fetch_arena_summary(conn, model_id)
 
-    # 构建响应
     return TimelineModelWithAnalysis(
         model_id=row["model_id"],
         provider=row["provider"],
@@ -694,51 +715,35 @@ async def get_model_analysis_with_scores(
     )
 
 
-@app.post("/api/arena/scores/batch")
-async def batch_update_arena_scores(
-    scores_data: dict,
-    conn: psycopg.Connection = Depends(get_db),
-) -> dict:
-    """批量更新模型的行业评分数据。"""
-    source = scores_data.get("source")
-    scores = scores_data.get("scores", [])
-
-    if not source or not scores:
-        raise HTTPException(status_code=400, detail="缺少必要参数: source 和 scores")
-
-    try:
-        with conn.cursor() as cursor:
-            for score_item in scores:
-                cursor.execute(
-                    """
-                    INSERT INTO model_arena_info
-                    (model_id, source, rank, score, category)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (model_id, source, category)
-                    DO UPDATE SET
-                        rank = EXCLUDED.rank,
-                        score = EXCLUDED.score,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    (
-                        score_item.get("model_id"),
-                        source,
-                        score_item.get("rank"),
-                        score_item.get("score"),
-                        score_item.get("category", "overall")
-                    )
-                )
-            conn.commit()
-        return {"success": True, "updated": len(scores)}
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")
+# 兜底路由：必须放在所有 /api/models/<固定路径> 之后。
+# `:path` 转换器会匹配任意层级的剩余路径。
+@app.get("/api/models/{model_id:path}", response_model=Model)
+def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT model_id, provider, model_name, description, tags, created_at, downloads, likes, model_card_url
+            FROM models
+            WHERE model_id = %s
+            """,
+            [model_id],
+        )
+        row = cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return Model(
+        model_id=row["model_id"],
+        provider=row["provider"],
+        model_name=row["model_name"],
+        description=row["description"],
+        tags=_parse_tags(row["tags"]),
+        created_at=row["created_at"],
+        downloads=row["downloads"],
+        likes=row["likes"],
+        model_card_url=row["model_card_url"],
+    )
 
 
 @app.get("/health")
-async def healthcheck():
+def healthcheck():
     return {"status": "ok"}
-
-
-
-
