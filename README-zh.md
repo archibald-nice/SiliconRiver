@@ -125,8 +125,6 @@ npm run dev        # http://localhost:5173
 | `AVATAR_MAX_BYTES` | 提供商头像大小限制，单位字节（默认：524288 = 512KB）|
 | `AVATAR_CACHE_TTL` | 浏览器缓存头像时长，单位秒（默认：86400 = 1 天）|
 
-**详细的 API 配置和成本分析，请参考 [docs/core-info-v1/1-API-INTEGRATION-GUIDE.md](docs/core-info-v1/1-API-INTEGRATION-GUIDE.md)**。
-
 ### 数据同步
 
 根据需要选择全量或增量脚本。每次运行都会在 `sync_log` 表记录操作。启用 Brave Search 和排行榜 API 后，新模型会自动包含实时网络信息和多维度验证数据。
@@ -163,8 +161,6 @@ python -m src.scraper.reanalyze_models --older-than-days 7 --no-confirm
 
 **性能**：单个模型分析平均耗时 10-12 秒（目标 <15秒），排行榜缓存命中率 80-85%。提供商头像自动缓存到 PostgreSQL，后续请求直接返回二进制或回退到上游 URL，受 `AVATAR_MAX_BYTES` 大小限制。
 
-**详细的性能监控和优化，请参考 [docs/core-info-v1/3-PERFORMANCE-MONITORING.md](docs/core-info-v1/3-PERFORMANCE-MONITORING.md)**。
-
 ## API 总览
 
 | 接口 | 作用 | 主要参数 |
@@ -176,26 +172,6 @@ python -m src.scraper.reanalyze_models --older-than-days 7 --no-confirm
 | `GET /health` | 健康自检，供负载均衡器使用。 | – |
 
 所有接口返回 JSON 格式，并支持 CORS 跨域访问。
-
-## 核心文档
-
-深入了解各个功能模块，请参考 [docs/core-info-v1/INDEX.md](docs/core-info-v1/INDEX.md)：
-
-| 文档 | 用途 | 受众 | 时长 |
-|------|------|------|------|
-| **1-API-INTEGRATION-GUIDE** | 配置 Brave Search 和 3 个排行榜 | 开发者、运维 | 30 分钟 |
-| **2-MILESTONE-DETECTION-RULES** | 理解 4 层里程碑算法和调优 | 数据科学家、产品 | 45 分钟 |
-| **3-PERFORMANCE-MONITORING** | 监控、诊断和优化系统性能 | 运维、SRE | 45 分钟 |
-| **4-DEPLOYMENT-OPERATIONS** | 生产部署、日常维护、故障排查 | 运维、运营 | 1.5 小时 |
-| **5-QUICK-REFERENCE-CARD** | 快速命令和参数查询 | 全部角色 | 5-10 分钟 |
-| **6-MODEL-REANALYSIS-GUIDE** | 灵活更新已有模型数据 | 运维、数据管理 | 15-20 分钟 |
-
-**快速入门路径**：
-
-- 🚀 **新开发者**：5 分钟快速参考 → 1-API 集成指南 → 核心代码
-- 🔧 **运维/SRE**：5 分钟快速参考 → 3-性能监控 → 4-部署运维 → 6-模型重新分析
-- 📊 **数据科学家**：2-里程碑检测规则 → 3-性能监控
-- 📋 **产品经理**：README 亮点功能 + 2-里程碑检测规则
 
 ## 前端特性
 
@@ -224,7 +200,6 @@ pytest
 - 性能监控和缓存行为
 - 优雅的 API 降级和错误处理
 
-性能基准测试详见 [docs/core-info-v1/3-PERFORMANCE-MONITORING.md](docs/core-info-v1/3-PERFORMANCE-MONITORING.md)。
 
 ## 项目结构
 
@@ -235,13 +210,6 @@ scripts/              数据库初始化脚本
 src/scraper/          Hugging Face 和 OpenRouter 抓取程序
 src/analysis/         AI 增强分析（Brave Search、排行榜、里程碑检测）
 tests/                Pytest 测试套件（75+ 用例）
-docs/core-info-v1/    核心项目文档（Phase 4）
-  ├── 1-API-INTEGRATION-GUIDE.md
-  ├── 2-MILESTONE-DETECTION-RULES.md
-  ├── 3-PERFORMANCE-MONITORING.md
-  ├── 4-DEPLOYMENT-OPERATIONS.md
-  ├── 5-QUICK-REFERENCE-CARD.md
-  └── INDEX.md
 .env.example          环境变量模板
 requirements.txt      Python 依赖清单
 ```
@@ -255,8 +223,6 @@ requirements.txt      Python 依赖清单
 - `src/analysis/performance_reporter.py` – 文本和 JSON 格式的性能报告
 - `src/scraper/reanalyze_models.py` – 模型重新分析工具（三种策略）
 - `scripts/update_leaderboards.py` – 排行榜缓存维护脚本
-
-完整文档导航，请见 [docs/core-info-v1/INDEX.md](docs/core-info-v1/INDEX.md)。
 
 ## 许可证
 

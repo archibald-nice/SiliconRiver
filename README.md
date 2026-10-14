@@ -116,8 +116,6 @@ Set `VITE_API_BASE` in `frontend/.env` (defaults to `http://localhost:8000`).
 | `AVATAR_MAX_BYTES` | Provider avatar size limit in bytes (default: 524288 = 512KB) |
 | `AVATAR_CACHE_TTL` | Browser cache duration for avatars in seconds (default: 86400 = 1 day) |
 
-**For detailed API configuration and cost analysis, see [docs/core-info-v1/1-API-INTEGRATION-GUIDE.md](docs/core-info-v1/1-API-INTEGRATION-GUIDE.md)**.
-
 ### Loading Data
 
 Run these scripts whenever you need to refresh the catalogue. Each command respects the configured provider lists and records the run inside `sync_log`. With Brave Search and leaderboard APIs enabled, new models are enriched with real-time context and multi-dimensional validation.
@@ -144,8 +142,6 @@ python -m src.scraper.reanalyze_models --older-than-days 7 --no-confirm
 
 **Performance**: Single model analysis completes in 10-12 seconds on average (target <15s), with 80-85% leaderboard cache hit rates. Provider avatars are cached inside PostgreSQL; subsequent API calls serve the binary directly or fall back to the upstream URL with size limits (`AVATAR_MAX_BYTES`).
 
-**For detailed monitoring and optimization, see [docs/core-info-v1/3-PERFORMANCE-MONITORING.md](docs/core-info-v1/3-PERFORMANCE-MONITORING.md)**.
-
 ## API Overview
 | Endpoint | Purpose | Key Parameters |
 |----------|---------|----------------|
@@ -156,25 +152,6 @@ python -m src.scraper.reanalyze_models --older-than-days 7 --no-confirm
 | `GET /health` | Lightweight health probe. | – |
 
 All endpoints return JSON and honour CORS for browser clients.
-
-## Core Documentation
-
-For in-depth guides tailored to specific roles, see [docs/core-info-v1/INDEX.md](docs/core-info-v1/INDEX.md):
-
-| Document | Purpose | Audience | Time |
-|----------|---------|----------|------|
-| **1-API-INTEGRATION-GUIDE** | Configure Brave Search and 3 leaderboards | Developers, DevOps | 30 min |
-| **2-MILESTONE-DETECTION-RULES** | Understand 4-tier milestone algorithm and tuning | Data Scientists, Product | 45 min |
-| **3-PERFORMANCE-MONITORING** | Monitor, diagnose, and optimize system | DevOps, SRE | 45 min |
-| **4-DEPLOYMENT-OPERATIONS** | Production deployment, maintenance, troubleshooting | DevOps, Ops | 1.5 hours |
-| **5-QUICK-REFERENCE-CARD** | Fast command and parameter lookup | All roles | 5-10 min |
-| **6-MODEL-REANALYSIS-GUIDE** | Flexibly update existing model data | DevOps, Data Admin | 15-20 min |
-
-**Quick start paths**:
-- 🚀 **New Developer**: 5-min Quick Ref → 1-API-INTEGRATION → Core Code
-- 🔧 **DevOps/SRE**: 5-min Quick Ref → 3-PERFORMANCE → 4-DEPLOYMENT → 6-REANALYSIS
-- 📊 **Data Scientist**: 2-MILESTONE-DETECTION → 3-PERFORMANCE
-- 📋 **Product Manager**: README highlights + 2-MILESTONE-DETECTION
 
 ## Frontend Features
 
@@ -202,7 +179,7 @@ The test suite (75+ test cases) provisions the schema, truncates it between case
 - Performance monitoring and cache behavior
 - Graceful API degradation and error handling
 
-For performance benchmarking, see [docs/core-info-v1/3-PERFORMANCE-MONITORING.md](docs/core-info-v1/3-PERFORMANCE-MONITORING.md).
+For performance benchmarking, see the results published alongside each release.
 
 ## Project Layout
 
@@ -212,14 +189,7 @@ frontend/             React + Vite single-page app (Timeline3D, filters)
 scripts/              Database bootstrap utilities
 src/scraper/          Hugging Face and OpenRouter ingestion jobs
 src/analysis/         AI-enhanced analysis (Brave Search, leaderboards, milestone detection)
-tests/                Pytest coverage for scraper + API integration (75+ cases)
-docs/core-info-v1/    Core project documentation (Phase 4)
-  ├── 1-API-INTEGRATION-GUIDE.md
-  ├── 2-MILESTONE-DETECTION-RULES.md
-  ├── 3-PERFORMANCE-MONITORING.md
-  ├── 4-DEPLOYMENT-OPERATIONS.md
-  ├── 5-QUICK-REFERENCE-CARD.md
-  └── INDEX.md
+tests/                Pytest coverage for scraper + API integration
 .env.example          Environment variable template
 requirements.txt      Shared Python dependencies
 ```
@@ -232,8 +202,6 @@ requirements.txt      Shared Python dependencies
 - `src/analysis/performance_reporter.py` – Performance reporting in text and JSON formats
 - `src/scraper/reanalyze_models.py` – Model re-analysis tool (three strategies)
 - `scripts/update_leaderboards.py` – Leaderboard cache maintenance script
-
-See [docs/core-info-v1/INDEX.md](docs/core-info-v1/INDEX.md) for complete documentation navigation.
 
 ## License
 MIT License – see [LICENSE](LICENSE).

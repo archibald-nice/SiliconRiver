@@ -7,7 +7,8 @@
 #   bash scripts/daily_sync.sh              # 正常跑
 #   bash scripts/daily_sync.sh --dry-run    # 只检查环境，不抓取
 #
-# 建议用 launchd / cron 每天定时调用本脚本（见 docs/部署手册）
+# 建议挂成定时任务每天调用本脚本（launchd / cron / systemd timer 均可）。
+# 脚本本身不依赖任何交互，失败只记日志并以非 0 退出，方便外部监控捕获。
 # ============================================================
 set -uo pipefail
 
@@ -51,7 +52,7 @@ fi
 log "[检查] .env OK"
 
 # ---------- 清理会打断 HTTP 客户端的代理变量 ----------
-# 两个实测会静默打死抓取/分析的坑（详见 docs/首次部署-从零到上线.md 的「代理污染」）：
+# 两个实测会静默打死抓取/分析的坑：
 #  1) all_proxy=socks5://... → httpx/requests 去建 SOCKS transport，venv 里没有
 #     socksio → ImportError，表现为接口 500 / 抓取全挂。
 #     注意只摘 all_proxy，http_proxy 要留着（境外站点得靠它出去）。
