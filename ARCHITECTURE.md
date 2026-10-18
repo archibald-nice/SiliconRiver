@@ -73,10 +73,16 @@ flowchart LR
 `description`(text) / `tags`(text, JSON 字符串) / `created_at`(timestamptz) /
 `downloads`(bigint) / `likes`(bigint) / `model_card_url`(text) /
 `inserted_at`(timestamptz, 默认 `CURRENT_TIMESTAMP`) / `is_open_source`(boolean) /
-`price`(jsonb) / `huggingface_rank`(int)
+`price`(jsonb) / `huggingface_rank`(int) / `source`(text, 默认 `unknown`)
 
 - `model_id` 形如 `provider/name`，**含斜杠**（影响 API 路由设计，见第 3 节）。
 - `created_at` 对 HF 是 HF 记录的发布时间；对 OpenRouter 是 API 的 `created` 时间戳。
+- `source` 记录数据血缘（ISSUE-004）：`huggingface` / `openrouter` / `unknown`。
+  写入端按**首个已知来源**获胜（`COALESCE(NULLIF(models.source,'unknown'), EXCLUDED.source)`），
+  所以一条 HF 与 OpenRouter 都写过的行，`source` 停在先写的那一侧，不会随每日同步翻转。
+  历史行由 `scripts/migrate_add_model_source.py` 按 `PROVIDERS` 白名单回填，重叠厂商
+  （google/openai/nvidia/qwen…）的 OpenRouter 行会被误标成 `huggingface`——回填是启发式，
+  不是事实。该列**不对外暴露**（API 查询都不带它），只给去重脚本与排查用。
 
 ### 2.3 `model_analysis`
 
@@ -278,11 +284,28 @@ selected = matched[:limit]             # 只砍已命中白名单的模型
 # 每日同步编排（抓取；内部清理代理变量并强制关闭分析）
 bash scripts/daily_sync.sh [--dry-run]
 
+# 数据维护（默认 dry-run，加 --apply 才写库）
+.venv/bin/python scripts/sync_arena_scores.py --source all   # 拉 LMArena + SWE-bench 评分写 model_arena_info
+.venv/bin/python scripts/fill_provider_avatars.py            # 按 data/provider_logos.yaml 补厂商头像
+.venv/bin/python scripts/fill_letter_avatars.py --missing    # 无品牌图的厂商用首字母占位头像
+.venv/bin/python scripts/dedupe_models.py                    # 大小写重复模型清理（先 dry-run）
+.venv/bin/python scripts/migrate_add_model_source.py          # models.source 列与回填
+
 # 体检与自检
 .venv/bin/python scripts/check_supabase.py          # 库连通性 + 六张表行数（输出已脱敏密码）
 .venv/bin/python scripts/check_deepseek_api.py      # DeepSeek 连通性
 .venv/bin/python scripts/find_duplicate_models.py   # 跨源重复模型扫描（只读）
 ```
+
+**HF 抓取默认按 `pipeline_tag` 过滤**（`HF_PIPELINE_TAG=text-generation`）：
+不带 filter 时 HF 会把该 org 的全部仓库拉回来（nvidia 975 个仓库里只有 269 个是
+text-generation），视觉/语音仓库会一起进时间轴。设成**空值 = 不过滤**（拉全量），
+只在需要考古时用。
+
+每个 provider 抓完会打一行**分阶段计时**：
+`Provider meta-llama 计时: list=53.3s readme=0.2s write=0.9s profile=1.8s 共 56.2s（70 个模型）`，
+中途异常时补「（中断于 list 段）」。这行是定位「生产 0.75 秒/模型 vs 本地 0.022 秒/模型」
+（ISSUE-029）的唯一依据——怀疑变慢时先看 list 还是 write 段。
 
 **同步与分析是分开的两个定时任务，不要合并**（原因见 AGENTS.md 踩坑 4.1/4.3）。
 分析编排器有自己的退出码语义（`decide_exit_code()`）：

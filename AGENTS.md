@@ -81,15 +81,20 @@ docs/        内部文档（gitignore）：issues/ 是缺陷档，不进仓库
     截断会打 WARNING），推荐 `0` = 不截断。
     填错的表现：该厂商一条进不来——现在会打「白名单里有 N 个条目一条都没匹配到」的 WARNING。
 
+13. `PROVIDERS` 是 HF 的 `?author=` **作者名，大小写敏感**：`nousresearch` 返 0 条、
+    `NousResearch` 才有；`liquidai` 同理要写 `LiquidAI`。填错不报错，只是静默少一家。
+    新增 org 前先 `curl "https://huggingface.co/api/models?author=<名字>&limit=1"` 确认能返回数据；
+    另外抓取默认带 `HF_PIPELINE_TAG=text-generation`，留空会把视觉/语音仓库一起抓进时间轴。
+
 **文档**
 
-13. `docs/` 整体被 gitignore（内部文档），**不要加回 git**。
-14. Markdown 图例用 mermaid，禁止 ASCII 字符画（规范见技能 `mermaid-md-diagrams`）；
+14. `docs/` 整体被 gitignore（内部文档），**不要加回 git**。
+15. Markdown 图例用 mermaid，禁止 ASCII 字符画（规范见技能 `mermaid-md-diagrams`）；
     用户点名 documd / docu.md 时改走 `documd-visuals`，两者不混用。
 
 **流程**
 
-15. 修缺陷先有档：`docs/issues/` 里没有就先立一条（现象/证据/修法/验证方式），
+16. 修缺陷先有档：`docs/issues/` 里没有就先立一条（现象/证据/修法/验证方式），
     修完写回状态与提交号；动手时发现范围变了，回档改范围再继续。
     反例：23 个问题曾散在两份临时文档里，回头得逐条复测才敢动手——**没档的"顺手修"既没人记得修了什么，也没人知道还剩什么**。
 
@@ -116,7 +121,7 @@ bash scripts/daily_sync.sh [--dry-run]                       # 每日同步编�
 .venv/bin/python scripts/check_supabase.py                   # 体检（只读，可安全贴输出）
 ```
 
-测试基线：`320 passed`，约 20 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
+测试基线：`454 passed`，约 22 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
 async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此前 33 个 async 用例一直是被跳过的，
 "全绿"并不覆盖它们。**测试不许依赖真实网络**：mock 漏一个客户端就会变成 70 秒超时 + 回落假数据，
 既慢又不稳定。详解见 ARCHITECTURE.md 第 8 节。
