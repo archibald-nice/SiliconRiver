@@ -32,26 +32,6 @@ export const buildApiUrl = (path: string) => {
   return new URL(path, API_BASE_URL).toString();
 };
 
-/** @deprecated 归档：模型列表视图已下线，接口保留以兼容历史用例。 */
-export interface ModelSummary {
-  model_id: string;
-  provider: string;
-  model_name: string;
-  description?: string;
-  tags: string[];
-  created_at: string;
-  downloads?: number;
-  likes?: number;
-  model_card_url: string;
-}
-
-export interface ModelListResponse {
-  items: ModelSummary[];
-  total: number;
-  page: number;
-  page_size: number;
-}
-
 export interface ProviderStat {
   provider: string;
   model_count: number;
@@ -85,6 +65,13 @@ export interface TimelineResponse {
 
 export interface ModelAnalysis {
   model_id: string;
+  /**
+   * 库里的展示用厂商名（`models.provider`，如 `aionlabs` / `spacexai` / `meta`）。
+   * 与 `model_id` 前缀（仓库组织名，如 `aion-labs` / `x-ai` / `meta-llama`）**不是一回事**，
+   * 头像接口与左侧厂商筛选器都按这个值匹配（ISSUE-016）。
+   * 可选：后端补字段前的旧响应里没有，调用方需要退回 `model_id` 前缀兜底。
+   */
+  provider?: string;
   analysis_summary?: string;
   key_features: string[];
   use_cases: string[];
@@ -105,20 +92,11 @@ export interface AnalyzedModelsResponse {
   page_size: number;
 }
 
-export interface AnalysisStats {
-  total_models: number;
-  analyzed_models: number;
-  unanalyzed_models: number;
-  analysis_rate: number;
-}
-
-/** @deprecated 归档：模型列表视图已下线，接口保留以兼容历史用例。 */
-export const fetchModels = async (params: Record<string, unknown>) => {
-  const { data } = await api.get<ModelListResponse>("/api/models", { params });
-  return data;
-};
-
-/** @deprecated 归档：厂商统计面板已下线，接口保留以兼容历史用例。 */
+/**
+ * 拉取厂商统计（`/api/stats/providers`）。
+ * **仍在用**：`frontend/src/pages/HomeWithAnalysis.tsx` 用它生成左侧厂商筛选列表。
+ * 它不是归档接口，别据此当死代码删掉（ISSUE-027 曾把这句注释写错）。
+ */
 export const fetchStats = async () => {
   const { data } = await api.get<ProviderStat[]>("/api/stats/providers");
   return data;
@@ -211,24 +189,4 @@ export const fetchAnalyzedModels = async (params: {
   }
   const { data } = await api.get<AnalyzedModelsResponse>("/api/models/analyzed", { params: query });
   return data;
-};
-
-/**
- * 获取AI分析统计信息。
- */
-export const fetchAnalysisStats = async (provider?: string) => {
-  const query: Record<string, unknown> = {};
-  if (provider) {
-    query.provider = provider;
-  }
-  const { data } = await api.get<AnalysisStats>("/api/analysis/stats", { params: query });
-  return data;
-};
-
-/**
- * 获取所有可用的分析标签。
- */
-export const fetchAnalysisTags = async () => {
-  const { data } = await api.get<{ tags: string[] }>("/api/analysis/tags");
-  return data.tags;
 };

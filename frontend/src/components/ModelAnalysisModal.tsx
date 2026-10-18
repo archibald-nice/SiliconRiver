@@ -54,8 +54,12 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProp
     }
   }, []);
 
-  // 获取提供商名称
-  const provider = analysis ? analysis.model_id.split("/")[0] : null;
+  // 厂商名优先取接口返回的 `provider`（库里的展示名，与左侧筛选器、头像接口一致）；
+  // 只有旧版响应没有该字段时才退回 `model_id` 的斜杠前缀。
+  // 前缀是仓库组织名，并不是展示名（`aion-labs` vs `aionlabs`、`x-ai` vs `spacexai`、
+  // `meta-llama` vs `meta`），用它拼头像 URL 会 404——见 ISSUE-016。
+  const modelIdPrefix = analysis ? analysis.model_id.split("/")[0] : null;
+  const provider = analysis?.provider?.trim() || modelIdPrefix;
   const avatarUrl = provider ? buildProviderAvatarUrl(provider) : null;
 
   return (
