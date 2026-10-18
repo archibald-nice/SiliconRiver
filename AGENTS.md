@@ -26,6 +26,17 @@ flowchart LR
 **关键设计边界**：抓取只在数据管线机器上跑，Web 服务侧纯只读查询。
 不要让 API 去抓数据。
 
+**目录与入口**（别猜位置，先看这里）
+
+```text
+backend/     FastAPI 只读 API（backend/main.py 路由全在这一个文件）
+frontend/    React + Three.js；App.tsx → pages/HomeWithAnalysis.tsx → components/Timeline3D.tsx（渲染大头）
+src/scraper/ 抓取与分析 CLI：fetch_models.py（HF）、fetch_models_openrouter.py（OR）、analysis_orchestrator.py（LLM 分析）
+scripts/     daily_sync.sh（每日编排）、dev_db.sh（本地库）、init_db.py（建表）
+tests/       pytest；test_api_contract.py 是路由不变量测试
+docs/        内部文档（gitignore）：issues/ 是缺陷档，不进仓库
+```
+
 ---
 
 ## 2. 铁律（每条都有事故前科）
@@ -66,6 +77,12 @@ flowchart LR
 14. Markdown 图例用 mermaid，禁止 ASCII 字符画（规范见技能 `mermaid-md-diagrams`）；
     用户点名 documd / docu.md 时改走 `documd-visuals`，两者不混用。
 
+**流程**
+
+15. 修缺陷先有档：`docs/issues/` 里没有就先立一条（现象/证据/修法/验证方式），
+    修完写回状态与提交号；动手时发现范围变了，回档改范围再继续。
+    反例：23 个问题曾散在两份临时文档里，回头得逐条复测才敢动手——**没档的"顺手修"既没人记得修了什么，也没人知道还剩什么**。
+
 ---
 
 ## 3. 命令速查
@@ -92,6 +109,10 @@ bash scripts/daily_sync.sh [--dry-run]                       # 每日同步编�
 测试基线：`148 passed, 33 skipped`——33 个 skipped 是 async 用例（venv 无 `pytest-asyncio`），
 **从未真正执行过**，别把绿灯当全覆盖。详解见 ARCHITECTURE.md 第 8 节。
 抓取/分析命令全集见 ARCHITECTURE.md 第 5 节。
+
+**验证按需**：改前端就跑 `npm run build`（含 tsc）；改后端就跑对应的 `pytest tests/<file>`。
+不要为了"确认没坏"擅自起 dev server、跑全量抓取或全量测试——前者挂住会话，后两者是生产写入/耗时。
+不确定该跑什么就问。
 
 ---
 
