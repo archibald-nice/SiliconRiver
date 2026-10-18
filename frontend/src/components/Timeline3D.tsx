@@ -59,7 +59,7 @@ const renderPriceTooltip = (price: unknown): string | null => {
   return `<div class="space-y-1 text-[11px] leading-relaxed text-text-muted">${entries.join("")}</div>`;
 };
 
-const escapeAttribute = (value: string) =>
+const escapeHtml = (value: string) =>
   value
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
@@ -68,13 +68,13 @@ const escapeAttribute = (value: string) =>
     .replace(/>/g, "&gt;");
 
 const buildPreviewMarkup = (model: TimelineModel) => {
-  const provider = escapeAttribute(model.provider ?? "");
+  const provider = escapeHtml(model.provider ?? "");
   const avatarUrl = model.avatar_url ? buildProviderAvatarUrl(model.provider) : null;
   const providerInitial = model.provider ? model.provider.trim().charAt(0).toUpperCase() || "?" : "?";
 
   const avatar = avatarUrl
     ? `<div class="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-avatar-bg text-xs font-semibold text-text-secondary">
-        <span class="absolute inset-0 flex items-center justify-center transition-opacity avatar-placeholder">${providerInitial}</span>
+        <span class="absolute inset-0 flex items-center justify-center transition-opacity avatar-placeholder">${escapeHtml(providerInitial)}</span>
         <img
           src="${avatarUrl}"
           alt="${provider}"
@@ -85,14 +85,14 @@ const buildPreviewMarkup = (model: TimelineModel) => {
           onerror="this.style.display='none'; const placeholder=this.previousElementSibling; if(placeholder){placeholder.style.display='flex'; placeholder.style.opacity='1';}"
         />
       </div>`
-    : `<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-default bg-avatar-bg text-xs font-semibold text-text-secondary">${providerInitial}</div>`;
+    : `<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-default bg-avatar-bg text-xs font-semibold text-text-secondary">${escapeHtml(providerInitial)}</div>`;
 
   return `
     <div class="flex items-center gap-2">
       ${avatar}
       <div class="min-w-0 flex-1">
         <div class="text-[10px] font-semibold uppercase tracking-wide text-accent-base">${provider}</div>
-        <div class="truncate text-[11px] font-medium text-text-primary">${escapeAttribute(model.model_name)}</div>
+        <div class="truncate text-[11px] font-medium text-text-primary">${escapeHtml(model.model_name)}</div>
       </div>
     </div>
   `;
@@ -358,12 +358,12 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           const createdAt = new Date(model.created_at).toLocaleString();
           const description = model.description ? model.description.slice(0, 120) : "";
           const providerInitial = model.provider ? model.provider.trim().charAt(0).toUpperCase() || "?" : "?";
-          const safeProviderAttr = escapeAttribute(model.provider ?? "");
+          const safeProviderAttr = escapeHtml(model.provider ?? "");
           const avatarUrl = model.avatar_url ? buildProviderAvatarUrl(model.provider) : null;
 
           const avatarMarkup = avatarUrl
             ? `<div class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border-default bg-avatar-bg text-sm font-semibold text-text-secondary">
-                <span class="absolute inset-0 flex items-center justify-center transition-opacity avatar-placeholder">${providerInitial}</span>
+                <span class="absolute inset-0 flex items-center justify-center transition-opacity avatar-placeholder">${escapeHtml(providerInitial)}</span>
                 <img
                   src="${avatarUrl}"
                   alt="${safeProviderAttr}"
@@ -374,7 +374,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                   onerror="this.style.display='none'; const placeholder=this.previousElementSibling; if(placeholder){placeholder.style.display='flex'; placeholder.style.opacity='1';}"
                 />
                </div>`
-            : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-avatar-bg text-sm font-semibold text-text-secondary">${providerInitial}</div>`;
+            : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-avatar-bg text-sm font-semibold text-text-secondary">${escapeHtml(providerInitial)}</div>`;
 
           const isOpenSource = model.is_open_source !== false;
           const licenseLabel = isOpenSource ? "开源" : "闭源";
@@ -392,7 +392,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
             ? `<span class="inline-flex items-center gap-1">${licenseChipMarkup}${priceIconMarkup}</span>`
             : licenseChipMarkup;
           const descriptionMarkup = description
-            ? `<div class="w-full text-[11px] leading-relaxed text-text-muted break-words whitespace-normal">${description}</div>`
+            ? `<div class="w-full text-[11px] leading-relaxed text-text-muted break-words whitespace-normal">${escapeHtml(description)}</div>`
             : "";
 
           focusPrimaryBubble.innerHTML = `
@@ -401,9 +401,9 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 <div class="flex items-start gap-3">
                   ${avatarMarkup}
                   <div class="min-w-0 flex-1">
-                    <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${model.provider}</div>
+                    <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${escapeHtml(model.provider ?? "")}</div>
                     <div class="mt-1 flex items-center gap-2">
-                      <div class="flex-shrink-0 text-[13px] font-medium text-text-secondary whitespace-nowrap">${model.model_name}</div>
+                      <div class="flex-shrink-0 text-[13px] font-medium text-text-secondary whitespace-nowrap">${escapeHtml(model.model_name)}</div>
                       ${licenseSectionMarkup}
                     </div>
                   </div>
@@ -602,13 +602,13 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
               const summaryMarkup = truncatedSummary
                 ? `<div class="mt-2 pt-2 border-t border-border-default/40">
                      <div class="text-[9px] px-2 py-1 mb-1.5 rounded bg-yellow-400/15 text-yellow-600 font-semibold">💡 点击查看AI分析</div>
-                     <div class="text-[10px] text-text-muted line-clamp-3">${truncatedSummary}</div>
+                     <div class="text-[10px] text-text-muted line-clamp-3">${escapeHtml(truncatedSummary)}</div>
                    </div>`
                 : '';
 
               tooltip.innerHTML = `
-                <div class="font-semibold text-accent-base">${model.provider}</div>
-                <div class="text-sm text-text-secondary">${model.model_name}</div>
+                <div class="font-semibold text-accent-base">${escapeHtml(model.provider ?? "")}</div>
+                <div class="text-sm text-text-secondary">${escapeHtml(model.model_name)}</div>
                 <div class="mt-1 text-xs text-text-muted">${new Date(model.created_at).toLocaleString()}</div>
                 ${summaryMarkup}
               `;
