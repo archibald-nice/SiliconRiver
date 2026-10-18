@@ -13,11 +13,12 @@ const Footer = () => {
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
-  // 如实描述实际数据管线：daily_sync.sh 每日 12:00（Asia/Shanghai）跑一轮同步（ISSUE-029）。
-  // 曾经写的「开源每 1 小时 / 闭源每 6 小时」没有任何定时任务在兑现。
+  // 如实描述实际数据管线：daily_sync.sh 每天 03:00（Asia/Shanghai）跑一轮同步（ISSUE-029）。
+  // 曾经写的「开源每 1 小时 / 闭源每 6 小时」没有任何定时任务在兑现；
+  // 排期在 2026-10-19 由 12:00 挪到凌晨 03:00（launchd StartCalendarInterval），文案必须跟着改。
   const tags = [
     "本网站获取信息来源：HuggingFace、OpenRouter",
-    "开源 / 闭源模型：每日 12:00（北京时间）同步一次",
+    "开源 / 闭源模型：每日 03:00（北京时间）同步一次",
   ];
 
   return (
