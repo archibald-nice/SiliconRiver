@@ -151,9 +151,13 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     container.appendChild(tooltip);
 
     // 焦点主气泡
+    // 外层容器不拦截指针事件（ISSUE-025）：气泡覆盖区域内的其它节点仍能被画布命中，
+    // 只有内部内容卡片（innerHTML 根节点上的 pointer-events-auto）自己接收交互。
+    // 宽度上限跟随画布宽度（100% - 2*padding），窄屏下不会撑出画布或被 clamp 推到节点正上方；
+    // 窄屏（<640px）同时把最小宽度收到 14rem，避免 18rem 占满 390px 视口。
     const focusPrimaryBubble = document.createElement("div");
     focusPrimaryBubble.className =
-      "pointer-events-auto inline-block min-w-[18rem] max-w-3xl rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors select-text";
+      "pointer-events-none inline-block min-w-[14rem] sm:min-w-[18rem] max-w-[calc(100%_-_1.5rem)] rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors select-text";
     focusPrimaryBubble.style.position = "absolute";
     focusPrimaryBubble.style.visibility = "hidden";
     focusPrimaryBubble.style.zIndex = "9";
@@ -390,7 +394,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
             : "";
 
           focusPrimaryBubble.innerHTML = `
-            <div class="inline-flex flex-col items-stretch gap-3">
+            <div class="pointer-events-auto inline-flex flex-col items-stretch gap-3">
               <div class="w-full rounded-lg bg-bubble-core p-3">
                 <div class="flex items-start gap-3">
                   ${avatarMarkup}
@@ -766,7 +770,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
               const screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
 
               const padding = 12;
-              const primaryOffsets = { x: 78, y: -170 };
+              const primaryOffsets = { x: 78 };
+              const PRIMARY_GAP = 24;
 
               const positionBubble = (bubble: HTMLDivElement, offsetX: number, offsetY: number) => {
                 const widthPx = bubble.offsetWidth || 0;
@@ -780,7 +785,15 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 return { left, top, width: widthPx, height: heightPx };
               };
 
-              const primaryRect = positionBubble(focusPrimaryBubble, primaryOffsets.x, primaryOffsets.y);
+              // 焦点气泡的垂直位置按气泡实测高度算：优先放在聚焦节点正上方（留 PRIMARY_GAP 间隙），
+              // 上方空间不足时翻到节点下方，避免固定 -170 偏移被 clamp 之后压住被聚焦的节点本身（ISSUE-025）。
+              const primaryHeight = focusPrimaryBubble.offsetHeight || 0;
+              const primaryOffsetY =
+                screenY - primaryHeight - PRIMARY_GAP >= padding
+                  ? -primaryHeight - PRIMARY_GAP
+                  : PRIMARY_GAP;
+              const primaryIsAboveNode = primaryOffsetY < 0;
+              const primaryRect = positionBubble(focusPrimaryBubble, primaryOffsets.x, primaryOffsetY);
               focusPrimaryBubble.style.visibility = "visible";
 
               // 更新引导线
@@ -804,6 +817,11 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
               const primaryRight = Math.min(primaryRect.left + primaryRect.width, viewportWidth - padding);
 
+              // 主气泡翻到节点下方时（ISSUE-025：节点靠近画布顶部），预览气泡整体往下排，
+              // 否则「上一个」会被放回节点上方、重新盖住被聚焦的节点。
+              let stackedPreviewTop: number | null = null;
+              let stackedPreviewHeight = 0;
+
               // 定位上一个气泡
               if (previousMarker) {
                 const prevWidth = focusPrevBubble.offsetWidth || 0;
@@ -814,10 +832,16 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 if (prevRight > viewportWidth - padding) {
                   prevLeft = viewportWidth - padding - prevWidth;
                 }
-                let prevTop = primaryRect.top - prevHeight - 12;
+                let prevTop = primaryIsAboveNode
+                  ? primaryRect.top - prevHeight - 12
+                  : primaryRect.top + primaryRect.height + PRIMARY_GAP;
                 if (prevTop < padding) prevTop = padding;
                 if (prevTop + prevHeight > viewportHeight - padding) {
                   prevTop = viewportHeight - prevHeight - padding;
+                }
+                if (!primaryIsAboveNode) {
+                  stackedPreviewTop = prevTop;
+                  stackedPreviewHeight = prevHeight;
                 }
                 focusPrevBubble.style.left = `${prevLeft}px`;
                 focusPrevBubble.style.top = `${prevTop}px`;
@@ -847,7 +871,11 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 if (nextRight > viewportWidth - padding) {
                   nextLeft = viewportWidth - padding - nextWidth;
                 }
-                let nextTop = primaryRect.top + primaryRect.height + 12;
+                let nextTop = primaryIsAboveNode
+                  ? primaryRect.top + primaryRect.height + 12
+                  : stackedPreviewTop != null
+                    ? stackedPreviewTop + stackedPreviewHeight + 8
+                    : primaryRect.top + primaryRect.height + PRIMARY_GAP;
                 if (nextTop + nextHeight > viewportHeight - padding) {
                   nextTop = viewportHeight - nextHeight - padding;
                 }
