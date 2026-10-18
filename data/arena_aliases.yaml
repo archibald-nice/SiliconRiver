@@ -26,8 +26,39 @@
 #   swebench:
 #     "claude-4-sonnet": anthropic/claude-sonnet-4
 
+# 2026-10-18 首批（13 条，全部「已实测」：目标 id 在库中存在，改名只差日期/版本尾零/
+# 尺寸后缀/品牌前缀这一类，且榜单名在该 org 下唯一，不存在选错型号的可能）。
+# 实测收益：LMArena overall 205→216 / 416（49.3%→51.9%），全分类行 +265；
+# SWE-bench 47→50 / 78。交叉验证 changed sets = 0（不改动任何原先已命中行）。
+#
+# 刻意**没有**收的 15 条「中置信」及原因（详见 docs/arena-alias-candidates.md）：
+#   - 档位合并（-thinking / -instant / -no-thinking → 基础模型）：会把思考档的分数
+#     记到非思考模型上，24 个分类榜一起污染；
+#   - beta → 正式版（grok-4.20-beta1、gemini-2.5-flash-lite-preview-*）：beta 分数不是正式版分数；
+#   - 库内同模型多 id（deepseek-ai/… vs deepseek/…、llama-4 简写卡 vs 完整卡）：
+#     别名只能指一个，选错会把分数挂到前端不主推的模型卡上。
+# 别名层绕过尺寸守卫，写错不会像归一化匹配那样被拦下，只会静默错配——宁缺勿错。
+
 shared: {}
 
-lmarena: {}
+lmarena:
+  # 版本尾零 / 尺寸后缀省略（库中该系列唯一）
+  "mistral-large-4": mistralai/mistral-large-4-0
+  "muse-glimmer": meta/muse-glimmer-30b
+  # 品牌前缀差异（Hunyuan / Qwen 系）
+  "hunyuan-hy3-preview": tencent/Hy3-preview
+  "hunyuan-large-2025-02-10": tencent/Tencent-Hunyuan-Large
+  # Amazon Nova：榜单省略 -v1，或写成 v1.0
+  "nova-2-lite": amazon/nova-2-lite-v1
+  "amazon-nova-pro-v1.0": amazon/nova-pro-v1
+  "amazon-nova-lite-v1.0": amazon/nova-lite-v1
+  "amazon-nova-micro-v1.0": amazon/nova-micro-v1
+  # 日期/格式后缀（-june-2024、-hf）
+  "phi-3-mini-4k-instruct-june-2024": microsoft/Phi-3-mini-4k-instruct
+  "codellama-34b-instruct": meta-llama/CodeLlama-34b-Instruct-hf
+  "codellama-70b-instruct": meta-llama/CodeLlama-70b-Instruct-hf
 
-swebench: {}
+swebench:
+  # 版本号顺序差异（4-5 ↔ 4.5）与日期快照后缀
+  "claude-4-5-opus": anthropic/claude-opus-4.5
+  "claude-4-sonnet-20250514": anthropic/claude-sonnet-4
