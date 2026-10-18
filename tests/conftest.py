@@ -46,9 +46,15 @@ def db_url() -> str:
     return TEST_DATABASE_URL
 
 
-@pytest.fixture(scope="session")
-def seeded_db(db_url: str) -> str:
-    """建表并塞入一批确定性的样本数据，供路由行为测试使用。"""
+def seed_sample_data(db_url: str) -> None:
+    """清空测试库并写入那套确定性样本数据（acme/globex 三个模型）。
+
+    抽成独立函数是因为它有两个调用方：`seeded_db`（session 级，开工时建一次）
+    与 `ensure_seeded`（用例级，被别的测试清库之后补回来）。样本数据原先只塞
+    一次，于是执行顺序一换就炸：`tests/test_fetch_models.py` 会 TRUNCATE 整个
+    库，排在它后面的路由测试就全查不到行（表现为 `total == 0`、`KeyError:
+    'provider'`），单独跑那个文件却又是绿的。
+    """
     import psycopg
 
     from scripts.init_db import create_schema
@@ -125,16 +131,43 @@ def seeded_db(db_url: str) -> str:
             """
         )
 
+@pytest.fixture(scope="session")
+def seeded_db(db_url: str) -> str:
+    """开工时建表并塞入样本数据（session 级，只跑一次）。"""
+    seed_sample_data(db_url)
     return db_url
 
 
 @pytest.fixture()
-def client(seeded_db: str, monkeypatch: pytest.MonkeyPatch):
+def ensure_seeded(seeded_db: str) -> str:
+    """样本数据被别的用例清掉后补回来。
+
+    `tests/test_fetch_models.py` 会 TRUNCATE 整库来验证写库逻辑，而 pytest 按
+    文件名顺序收集，它排在多数 `test_issue_*` 之前。只塞一次的 session 级样本
+    因此会在中途消失，后面的路由测试读到空库。这里在每条用例前做一次极廉价的
+    探测（`SELECT 1 FROM models LIMIT 1`），发现没了就重新播种——代价是每条
+    用例多一次索引探测，换来的是「单跑绿、全跑红」这类顺序依赖消失。
+    """
+    import psycopg
+
+    # 探测必须盯住样本里的**具体行**，不能只问「库里有没有模型」：
+    # test_fetch_models.py 清库后会写回自己的 meta-llama/* 行，只探存在性会
+    # 误判为健康，而 acme/alpha-1 其实已经不在了。
+    with psycopg.connect(seeded_db) as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM models WHERE model_id = 'acme/alpha-1'")
+        healthy = cur.fetchone() is not None
+    if not healthy:
+        seed_sample_data(seeded_db)
+    return seeded_db
+
+
+@pytest.fixture()
+def client(ensure_seeded: str, monkeypatch: pytest.MonkeyPatch):
     """指向测试库的 TestClient。"""
     from fastapi.testclient import TestClient
 
     import backend.main as main
 
-    monkeypatch.setattr(main, "DATABASE_URL", seeded_db)
+    monkeypatch.setattr(main, "DATABASE_URL", ensure_seeded)
     with TestClient(main.app, raise_server_exceptions=False) as test_client:
         yield test_client

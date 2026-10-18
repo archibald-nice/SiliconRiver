@@ -8,7 +8,7 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathLib
-from typing import Dict, List, Optional
+from typing import List, Optional
 from urllib.parse import urlsplit
 
 import psycopg
@@ -40,7 +40,6 @@ from models import (
     TimelineResponse,
     ModelAnalysis,
     AnalysisList,
-    AnalysisStats,
     ArenaScoreInfo,
     ArenaScoreSummary,
     TimelineModelWithAnalysis,
@@ -78,6 +77,17 @@ AVATAR_MAX_REDIRECTS = int(os.getenv("AVATAR_MAX_REDIRECTS", "3"))
 # 搜索串长度上限：真实模型名/关键词远短于此；超长串要么是误用，要么是想拿全表扫描
 # 当廉价入口。超长直接 422 拒绝而不是截断——截断会把「搜到别的东西」藏起来。
 SEARCH_MAX_LENGTH = 64
+
+# ---------- 只读列表接口的缓存策略（ISSUE-021） ----------
+# 这两个接口的响应体只随「每日同步」变化，但时间轴窗口的 end 是「服务端当前时间」，
+# 所以两者的新鲜度要求不一样：
+# - /api/models：数据一天最多变几次，1 分钟内复用旧值完全够用；
+#   stale-while-revalidate=300 让浏览器先回旧值、后台再校验，弱网下不用空等回源。
+CACHE_CONTROL_MODELS = "public, max-age=60, stale-while-revalidate=300"
+# - /api/timeline：max-age 刻意压到 15 秒。默认 preset=30d 的窗口是「从现在往回 30 天」，
+#   每过一秒窗口边界都在滑动；新模型入库后旧响应立刻过时。缓存只用来吸收一次页面加载里
+#   的突发重复请求，不指望跨页面/跨会话复用，所以 max-age 不能取 60。
+CACHE_CONTROL_TIMELINE = "public, max-age=15, stale-while-revalidate=60"
 
 # ---------- 数据库连接池参数 ----------
 # min_size=0：冷启动不抢连接，空闲时也不占着 Supabase 的连接配额。
@@ -220,6 +230,7 @@ def get_db():
 
 @app.get("/api/models", response_model=ModelList)
 def list_models(
+    response: Response,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     provider: Optional[str] = None,
@@ -227,6 +238,12 @@ def list_models(
     search: Optional[str] = Query(None, max_length=SEARCH_MAX_LENGTH),
     conn: psycopg.Connection = Depends(get_db),
 ):
+    """分页查询模型列表。
+
+    total 与 items 必须来自**同一次查询**（ISSUE-021）：原先先 `SELECT COUNT(*)`
+    再 `LIMIT/OFFSET` 是两条独立语句，同步任务在两条语句之间提交时，客户端会拿到
+    「total 属于新快照、items 属于旧快照」的组合。这里合并成一条语句，快照天然一致。
+    """
     offset = (page - 1) * page_size
     filters: List[str] = []
     params: List[object] = []
@@ -244,22 +261,33 @@ def list_models(
     where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
 
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(f"SELECT COUNT(*) AS total FROM models{where_clause}", params)
-        total_row = cursor.fetchone()
-        total = int(total_row["total"]) if total_row else 0
-
+        # 一条语句同时取 total 与当页数据：filtered 被 count 和 page 两个 CTE 引用，
+        # 两者共享同一个快照。用 LEFT JOIN（以只返回一行的 count 为左表）而不是
+        # `COUNT(*) OVER()` 的原因：窗口函数的行数由结果的 LIMIT 决定，当 offset
+        # 超出末尾时结果为空、total 会错误地变成 0；count 左连接保证即使当页为空
+        # 也仍返回一行 total，接口对「翻过头」的分页请求保持原有语义。
         cursor.execute(
             f"""
-            SELECT model_id, provider, model_name, description, tags, created_at, downloads, likes, model_card_url
-            FROM models
-            {where_clause}
-            ORDER BY created_at DESC
-            LIMIT %s OFFSET %s
+            WITH filtered AS (
+                SELECT model_id, provider, model_name, description, tags, created_at,
+                       downloads, likes, model_card_url
+                FROM models
+                {where_clause}
+            )
+            SELECT page.*, total.total
+            FROM (SELECT COUNT(*) AS total FROM filtered) AS total
+            LEFT JOIN (
+                SELECT * FROM filtered
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            ) AS page ON TRUE
+            ORDER BY page.created_at DESC NULLS LAST
             """,
             [*params, page_size, offset],
         )
         rows = cursor.fetchall()
 
+    total = int(rows[0]["total"]) if rows else 0
     items = [
         Model(
             model_id=row["model_id"],
@@ -273,8 +301,11 @@ def list_models(
             model_card_url=row["model_card_url"],
         )
         for row in rows
+        # 当页为空时 count 左连接会补一行全 NULL 的占位行，只用来承载 total
+        if row["model_id"] is not None
     ]
 
+    response.headers["Cache-Control"] = CACHE_CONTROL_MODELS
     return ModelList(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -370,6 +401,7 @@ def list_analyzed_models(
 
 @app.get("/api/timeline", response_model=TimelineResponse)
 def timeline_models(
+    response: Response,
     preset: str = Query("30d", pattern="^(30d|6m|1y|all)$"),
     year: Optional[int] = Query(None, ge=1900, le=3000),
     page: int = Query(1, ge=1),
@@ -380,6 +412,13 @@ def timeline_models(
     open_source: Optional[bool] = Query(None),
     conn: psycopg.Connection = Depends(get_db),
 ):
+    """时间轴窗口内的模型分页。
+
+    total 与 items 合并进同一条语句（ISSUE-021，同 `/api/models`）：`filtered` CTE
+    只筛模型行，count 与当页数据都从它派生，因此共享同一快照。count 数的是**模型行**
+    而不是 LEFT JOIN 之后的宽行，保持与改动前 `SELECT COUNT(*) FROM models` 的口径一致
+    （`model_analysis.model_id` 有唯一约束，宽行不会放大，但口径显式写清更稳妥）。
+    """
     start, end, label = _calculate_timeline_window(preset=preset, year=year)
     order_clause = "ASC" if sort == "asc" else "DESC"
     offset = (page - 1) * page_size
@@ -406,44 +445,34 @@ def timeline_models(
     where_clause = " AND ".join(filters)
 
     with conn.cursor(row_factory=dict_row) as cursor:
+        # 结构与 `/api/models` 相同：count 左连接当页数据，一条语句出结果。
+        # 当页为空（offset 超出末尾）时仍返回一行承载 total，避免 total 变成 0。
         cursor.execute(
             f"""
-            SELECT COUNT(*) AS total
-            FROM models AS m
-            WHERE {where_clause}
+            WITH filtered AS (
+                SELECT m.model_id, m.provider, m.model_name, m.description, m.tags,
+                       m.created_at, m.model_card_url, m.is_open_source, m.price,
+                       m.huggingface_rank
+                FROM models AS m
+                WHERE {where_clause}
+            )
+            SELECT page.*, total.total
+            FROM (SELECT COUNT(*) AS total FROM filtered) AS total
+            LEFT JOIN (
+                SELECT f.*, p.avatar_url, ma.analysis_summary
+                FROM filtered AS f
+                LEFT JOIN providers AS p ON f.provider = p.provider_id
+                LEFT JOIN model_analysis AS ma ON f.model_id = ma.model_id
+                ORDER BY f.created_at {order_clause}
+                LIMIT %s OFFSET %s
+            ) AS page ON TRUE
+            ORDER BY page.created_at {order_clause} NULLS LAST
             """,
-            params,
-        )
-        total_row = cursor.fetchone()
-        total = int(total_row["total"]) if total_row else 0
-
-        query_params = [*params, page_size, offset]
-        cursor.execute(
-            f"""
-            SELECT
-                m.model_id,
-                m.provider,
-                m.model_name,
-                m.description,
-                m.tags,
-                m.created_at,
-                m.model_card_url,
-                p.avatar_url,
-                m.is_open_source,
-                m.price,
-                m.huggingface_rank,
-                ma.analysis_summary
-            FROM models AS m
-            LEFT JOIN providers AS p ON m.provider = p.provider_id
-            LEFT JOIN model_analysis AS ma ON m.model_id = ma.model_id
-            WHERE {where_clause}
-            ORDER BY m.created_at {order_clause}
-            LIMIT %s OFFSET %s
-            """,
-            query_params,
+            [*params, page_size, offset],
         )
         rows = cursor.fetchall()
 
+    total = int(rows[0]["total"]) if rows else 0
     items = [
         TimelineModel(
             model_id=row["model_id"],
@@ -460,8 +489,11 @@ def timeline_models(
             analysis_summary=row.get("analysis_summary"),
         )
         for row in rows
+        # 当页为空时 count 左连接补的那行占位行为 NULL，过滤掉
+        if row["model_id"] is not None
     ]
 
+    response.headers["Cache-Control"] = CACHE_CONTROL_TIMELINE
     return TimelineResponse(
         items=items,
         total=total,
@@ -704,10 +736,15 @@ def get_model_analysis(
     model_id = request.model_id
 
     with conn.cursor(row_factory=dict_row) as cursor:
+        # provider 取自关联的 models 表（ISSUE-016）：model_analysis 自己那份 provider
+        # 是分析时抄下来的副本，而 models.provider 才是站内筛选/头像用的权威值。
+        # 两者可能不一致（`aion-labs` vs `aionlabs`），所以不做 COALESCE 兜底，
+        # 直接按 models.provider 返回；models 行缺失时留 NULL，前端自有回退。
         cursor.execute(
             """
             SELECT
                 ma.model_id,
+                m.provider AS provider,
                 ma.analysis_summary,
                 ma.key_features,
                 ma.use_cases,
@@ -719,9 +756,10 @@ def get_model_analysis(
                 ma.updated_at,
                 array_agg(DISTINCT mt.tag) FILTER (WHERE mt.tag IS NOT NULL) as tags
             FROM model_analysis ma
+            LEFT JOIN models m ON ma.model_id = m.model_id
             LEFT JOIN model_tags mt ON ma.model_id = mt.model_id
             WHERE ma.model_id = %s
-            GROUP BY ma.id, ma.model_id, ma.analysis_summary, ma.key_features,
+            GROUP BY ma.id, ma.model_id, m.provider, ma.analysis_summary, ma.key_features,
                      ma.use_cases, ma.performance_metrics, ma.llm_model_used, ma.analyzed_at,
                      ma.is_milestone, ma.milestone_features, ma.updated_at
             """,
@@ -734,6 +772,7 @@ def get_model_analysis(
 
     return ModelAnalysis(
         model_id=row["model_id"],
+        provider=row["provider"],
         analysis_summary=row["analysis_summary"],
         key_features=row["key_features"] or [],
         use_cases=row["use_cases"] or [],
@@ -745,62 +784,6 @@ def get_model_analysis(
         milestone_features=row["milestone_features"],
         updated_at=row["updated_at"],
     )
-
-
-@app.get("/api/analysis/stats", response_model=AnalysisStats)
-def get_analysis_stats(
-    provider: Optional[str] = None,
-    conn: psycopg.Connection = Depends(get_db),
-):
-    """获取AI分析统计信息。"""
-    with conn.cursor(row_factory=dict_row) as cursor:
-        # 统计总模型数和已分析模型数
-        query = """
-            SELECT
-                COUNT(DISTINCT m.model_id) as total_models,
-                COUNT(DISTINCT ma.model_id) as analyzed_models
-            FROM models m
-            LEFT JOIN model_analysis ma ON m.model_id = ma.model_id
-            WHERE 1=1
-        """
-        params = []
-
-        if provider:
-            query += " AND m.provider = %s"
-            params.append(provider)
-
-        cursor.execute(query, params)
-        row = cursor.fetchone()
-
-    total_models = int(row["total_models"]) if row else 0
-    analyzed_models = int(row["analyzed_models"]) if row else 0
-    unanalyzed_models = total_models - analyzed_models
-    analysis_rate = (analyzed_models / total_models * 100) if total_models > 0 else 0.0
-
-    return AnalysisStats(
-        total_models=total_models,
-        analyzed_models=analyzed_models,
-        unanalyzed_models=unanalyzed_models,
-        analysis_rate=round(analysis_rate, 2),
-    )
-
-
-@app.get("/api/analysis/tags")
-def get_analysis_tags(conn: psycopg.Connection = Depends(get_db)):
-    """获取所有可用的分析标签。"""
-    with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """
-            SELECT DISTINCT tag
-            FROM model_tags
-            WHERE tag IS NOT NULL
-            ORDER BY tag
-            """
-        )
-        rows = cursor.fetchall()
-
-    tags = [row["tag"] for row in rows]
-    return {"tags": tags}
 
 
 def _fetch_arena_summary(conn: psycopg.Connection, model_id: str) -> ArenaScoreSummary:
@@ -914,10 +897,55 @@ def get_model_analysis_with_scores(
     )
 
 
+# --------------------------------------------------------------------------
+# 兜底路由之前的「已知路径 + 错误方法」显式注册（ISSUE-022）
+# --------------------------------------------------------------------------
+# 这两个路径只有 POST 版本。不显式注册 GET 的话，请求会一路落到文件末尾的
+# `/api/models/{model_id:path}`，被当成 model_id="analysis" 去查库，回 404
+# "Model not found" —— 把「方法用错了」伪装成「模型不存在」，排障时极具误导性。
+# 显式返回 405 + Allow，语义才是准确的。注意：必须注册在兜底路由**之前**，
+# 否则 `:path` 转换器会先把它们吃掉（顺序不变量由 tests/test_api_contract.py 守着）。
+@app.get("/api/models/analysis")
+def models_analysis_get_not_allowed():
+    """GET 该路径是方法错误，不是资源不存在：正确入口是 POST。"""
+    raise HTTPException(
+        status_code=405,
+        detail="Method Not Allowed: use POST /api/models/analysis",
+        headers={"Allow": "POST"},
+    )
+
+
+@app.get("/api/models/analysis-with-scores")
+def models_analysis_with_scores_get_not_allowed():
+    """GET 该路径是方法错误，不是资源不存在：正确入口是 POST。"""
+    raise HTTPException(
+        status_code=405,
+        detail="Method Not Allowed: use POST /api/models/analysis-with-scores",
+        headers={"Allow": "POST"},
+    )
+
+
 # 兜底路由：必须放在所有 /api/models/<固定路径> 之后。
-# `:path` 转换器会匹配任意层级的剩余路径。
+# `:path` 转换器会匹配任意层级的剩余路径（真实 model_id 形如 "provider/name"，
+# 含斜杠，默认的字符串转换器匹配不到）。
+#
+# 这个路由会把「未定义的 /api/models/* 路径」也一起吃下来，所以函数内必须把
+# 「路径不存在」和「模型不存在」分开（ISSUE-022）。判定分两步：
+#   1. 不含斜杠的单段路径不可能是模型 ID（HF / OpenRouter 的 model_id 都是
+#      `组织/模型名`，这正是这里必须用 `:path` 的原因）→ 视为未知路径；
+#   2. 含斜杠但库里查不到时，再看首段命名空间是否真的存在过（`SELECT 1 FROM models
+#      WHERE model_id LIKE '<首段>/%'`）。命名空间不存在 = 十有八九是拼错的路径
+#      （`/api/models/anything/typo`）；命名空间存在 = 真的是模型名写错了。
+# 三条分支都是 404，但 detail 不同，调用方能区分「接口不存在」与「模型不存在」；
+# 真实模型的详情请求在第 2 步之前就以 200 返回，不受影响。
 @app.get("/api/models/{model_id:path}", response_model=Model)
 def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
+    if "/" not in model_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown API path: /api/models/{model_id}",
+        )
+
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
@@ -928,6 +956,25 @@ def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
             [model_id],
         )
         row = cursor.fetchone()
+
+        if not row:
+            # 首段命名空间在 models 表里是否出现过。这里故意查 models 而不是 providers：
+            # model_id 的前缀是「仓库组织名」，与 providers.provider_id 并不总相等
+            # （`aion-labs` vs `aionlabs`），只有 models 表认识 `aion-labs` 这种前缀。
+            provider_prefix = model_id.split("/", 1)[0]
+            cursor.execute(
+                "SELECT 1 FROM models WHERE model_id LIKE %s ESCAPE '\\' LIMIT 1",
+                [f"{_escape_like(provider_prefix)}/%"],
+            )
+            if cursor.fetchone() is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Unknown API path: no models under provider namespace "
+                        f"'{provider_prefix}'"
+                    ),
+                )
+
     if not row:
         raise HTTPException(status_code=404, detail="Model not found")
     return Model(

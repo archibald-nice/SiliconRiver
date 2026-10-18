@@ -27,6 +27,9 @@ class ModelAnalysis(BaseModel):
     model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
 
     model_id: str
+    # 厂商名取自关联的 models.provider（ISSUE-016）：model_id 的斜杠前缀是仓库组织名
+    # （`aion-labs`），不等于展示用的厂商名（`aionlabs`），前端不能再从 model_id 推导。
+    provider: Optional[str] = None
     analysis_summary: Optional[str] = None
     key_features: List[str] = []
     use_cases: List[str] = []
@@ -94,16 +97,6 @@ class ProviderStat(BaseModel):
 
     provider: str
     model_count: int
-
-
-class AnalysisStats(BaseModel):
-    """AI分析统计信息。"""
-    model_config = ConfigDict(protected_namespaces=(), ser_json_schema_extra=None)
-
-    total_models: int
-    analyzed_models: int
-    unanalyzed_models: int
-    analysis_rate: float
 
 
 class ModelList(BaseModel):

@@ -319,22 +319,6 @@ def test_provider_stats_groups_by_provider(client):
     assert stats == {"acme": 2, "globex": 1}
 
 
-def test_analysis_stats_counts_analyzed_models(client):
-    response = client.get("/api/analysis/stats")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["total_models"] == 3
-    assert body["analyzed_models"] == 1
-    assert body["unanalyzed_models"] == 2
-
-
-def test_analysis_tags_are_sorted_and_unique(client):
-    response = client.get("/api/analysis/tags")
-    assert response.status_code == 200
-    tags = response.json()["tags"]
-    assert tags == ["llm", "vision"]
-
-
 def test_models_list_paginates(client):
     response = client.get("/api/models", params={"page": 1, "page_size": 2})
     assert response.status_code == 200
