@@ -66,10 +66,14 @@ docs/        内部文档（gitignore）：issues/ 是缺陷档，不进仓库
     填成 `http://localhost:8000` 会让线上页面请求访问者自己的 8000 端口（页面能开、数据全空）。
 11. `model_id` 含斜杠 → 路由必须 `{model_id:path}`；兜底路由必须放所有固定路径之后
     （`tests/test_api_contract.py` 的不变量测试守着，改路由先跑它）。
-12. `PROVIDERS_OPENROUTER` 是白名单过滤器，填**展示名**不是 id 前缀
-    （`mistralai`→`mistral`、`meta-llama`→`meta`、`z-ai`→`z.ai`、`x-ai`→`spacexai`）；
-    `OPENROUTER_DAILY_FETCH_LIMIT` 必须 ≥ OpenRouter 全量模型数（limit 在过滤**之前**截断）。
-    填错的表现：该厂商一条进不来，且不报错。
+12. `PROVIDERS_OPENROUTER` 是白名单过滤器。匹配用的 key 由 `provider_key_for()` 解析：
+    **品牌别名优先**（`mistralai`→`mistral`、`meta-llama`→`meta`、`z-ai`→`z.ai`、
+    `x-ai`/`xai`→`spacexai`，见 `PROVIDER_KEY_ALIASES`）→ 否则用 name 里的展示名
+    （`Display: Model` 冒号前那段）→ 再用 id 前缀兜底（`qwen`、`gryphe`、`rekaai` 这类前缀
+    本身就是条目）。新增别名要写进 `PROVIDER_KEY_ALIASES`，别在环境变量里凑。
+    `OPENROUTER_DAILY_FETCH_LIMIT` 是**白名单过滤之后**的上限（ISSUE-030 已改为先过滤后截断，
+    截断会打 WARNING），推荐 `0` = 不截断。
+    填错的表现：该厂商一条进不来——现在会打「白名单里有 N 个条目一条都没匹配到」的 WARNING。
 
 **文档**
 

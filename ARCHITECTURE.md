@@ -209,24 +209,26 @@ if providers_filter and provider_key not in providers_filter:
 
 **留空 = 不过滤（全收）**。当前默认放行 **51 家**厂商。
 
-**坑 1：必须填「展示名」，不是 `model_id` 的 id 前缀。**
-`provider` 入库时取接口 `name` 字段冒号前的部分（展示名），两者对很多厂商并不一致（已实测）：
+**坑 1（已于 ISSUE-032 修复）：匹配 key 与 `model_id` 前缀一度不一致。**
+白名单条目要和 `provider_key_for()` 的产出对上。现在的解析顺序（`fetch_models_openrouter.py`）：
 
-| id 前缀 | 实际入库的 provider key |
-|---|---|
-| `mistralai` | **`mistral`** |
-| `z-ai` | **`z.ai`** |
-| `x-ai` | **`spacexai`** |
-| `meta-llama` | **`meta`** |
+1. **品牌别名表** `PROVIDER_KEY_ALIASES`：`mistralai`→`mistral`、`z-ai`→`z.ai`、
+   `x-ai`/`xai`→`spacexai`、`meta-llama`→`meta` 等 15 条，只登记「id 前缀与白名单写法确实不同」的品牌；
+2. 否则取接口 `name` 字段冒号前的**展示名**（`Display: Model` → `Display`）；
+3. 未登记品牌的 id 前缀兜底（`qwen`/`gryphe`/`anthracite-org`/`rekaai` 这类前缀本身就是条目）；
+4. name 整串小写；5. `"unknown"`。
 
-填错的表现是该厂商一条都进不来，且不报错。只有 `google` / `openai` / `anthropic`
-几家展示名与前缀恰好一致，所以这个坑容易被掩盖。
+历史坑（供对照）：旧实现只做「展示名前缀」，于是 `name` 无冒号的条目
+（如 `Mistral Large 2407`）被解析成整串模型名当 provider，产出 `mistral large 2407` 这类伪 key；
+反过来只按 id 前缀匹配会让 `cognitivecomputations`/`openrouter` 这类命名空间被当厂商，
+实测反向丢 90 条。所以「别名 → 展示名 → id 前缀兜底」三级都要有。
 
-另有一类**解析降级**：部分条目 `name` 不含冒号（如 `Mistral Large 2407`），
-`extract_provider()` 会回退成把**整个模型名**当 provider，产出 `mistral large 2407`、
-`sao10k` 这类伪 key。白名单不要收录它们。
+**新增品牌别名要改 `PROVIDER_KEY_ALIASES`，不要指望环境变量里换写法。**
+0 命中现在会打 WARNING：「白名单里有 N 个条目一条都没匹配到」。
 
-**坑 2：limit 在过滤之前截断。**
+**坑 2（已于 ISSUE-030 修复）：limit 曾经在过滤之前截断。**
+
+旧实现（错误顺序）：
 
 ```python
 raw_models = raw_models[:limit]        # 先截断
@@ -234,8 +236,17 @@ for item in raw_models:
     if provider_key not in providers_filter: continue   # 再过滤
 ```
 
-所以 `OPENROUTER_DAILY_FETCH_LIMIT` **必须 ≥ OpenRouter 全量模型数**，否则排在后面的
-厂商会被整体挤掉，表现为「一条都没有」。当前设为 462。
+2026-10-18 上游涨到 471 条、窗口 462 时，尾部 6 条白名单模型（`openai/gpt-3.5-turbo-instruct`
+等）连过滤机会都没有，静默消失。现在顺序是 `select_models()` 里**先白名单过滤、再 limit 截断**：
+
+```python
+matched = [m for m in raw_models if provider_key_for(m) in providers_filter]
+selected = matched[:limit]             # 只砍已命中白名单的模型
+```
+
+`OPENROUTER_DAILY_FETCH_LIMIT` 因此变成「过滤后的上限 / 安全阀」，推荐 `0`（不截断）；
+真的截断时一定打 WARNING：「上游 N 条，白名单命中 F 条，窗口 M 条，丢弃 K 条白名单模型」。
+回归测试在 `tests/test_issue_030_openrouter_limit.py`。
 
 ---
 

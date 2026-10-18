@@ -99,7 +99,8 @@ else
 fi
 
 # ---------- 2) OpenRouter 增量 ----------
-log "→ OpenRouter 增量抓取（上限 ${OPENROUTER_DAILY_FETCH_LIMIT:-300}）"
+# limit 是「白名单过滤之后」的安全阀（ISSUE-030），0 = 不截断
+log "→ OpenRouter 增量抓取（过滤后上限 ${OPENROUTER_DAILY_FETCH_LIMIT:-0}，0 表示不截断）"
 if "${PYTHON}" -m src.scraper.fetch_models_openrouter_incr_day >>"${LOG_FILE}" 2>&1; then
   log "  [成功] OpenRouter 增量完成"
 else

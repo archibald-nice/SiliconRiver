@@ -10,7 +10,10 @@ LOGGER = logging.getLogger("silicon_river.fetch.openrouter.daily")
 LOGGING_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOGGING_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s")
 
-DEFAULT_LIMIT = 300
+# ISSUE-030：这是**白名单过滤之后**的安全阀，不是丢弃源数据的窗口。
+# 0 = 不截断（推荐）：limit 只在「已命中白名单的模型太多、需要限流」时才有意义，
+# 截断会打 WARNING 而不是静默丢数据。旧值 300 小于上游总数，曾整段吃掉尾部厂商。
+DEFAULT_LIMIT = 0
 
 
 def main() -> None:
