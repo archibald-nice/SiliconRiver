@@ -116,7 +116,7 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId, modelCreatedAt }: ModelA
                 {error && (
                   <div className="flex items-center justify-center py-12">
                     {isAnalysisMissing ? (
-                      <p className="text-text-muted">该模型暂无分析结果，分析任务每日 12:30 运行</p>
+                      <p className="text-text-muted">该模型暂无分析结果，分析任务每天凌晨运行一次</p>
                     ) : (
                       <p className="text-rose-400">加载分析数据失败，请重试</p>
                     )}

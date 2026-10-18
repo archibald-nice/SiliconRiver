@@ -4,7 +4,7 @@
 
 Silicon River ingests public LLM catalogues (Hugging Face, OpenRouter), optionally enriches them with Brave web search and three leaderboard clients, applies a keyword-and-rank **milestone heuristic**, and renders an interactive **3D spiral timeline** with filtering and tooltips.
 
-**Latest enhancement (Phase 4, Nov 2025)**: in-process performance metrics, optional leaderboard clients (SWE-bench, LMSYS Arena, HF Leaderboard), and four-branch milestone detection. Leaderboard lookups ship **disabled by default** because the upstream endpoints are slow or unreliable, and two of the clients fall back to hard-coded sample data (see [Known gaps](#known-gaps)).
+**Latest enhancement (Phase 5, Oct 2026)**: real arena scores imported from **LMArena** (HF `lmarena-ai/leaderboard-dataset`) and **SWE-bench** by `scripts/sync_arena_scores.py`, UTC `timestamptz` storage end to end, HF ingestion filtered by `pipeline_tag`, and a test suite that never touches the network. The legacy in-process leaderboard clients stay **disabled by default** (see [Known gaps](#known-gaps)).
 
 _中文文档请见 [README-zh.md](README-zh.md)._
 
@@ -18,7 +18,7 @@ _中文文档请见 [README-zh.md](README-zh.md)._
 
 - **Filter-First UX** – Time ranges (30d/6m/1y/all), years, providers, text search, and license filters with instant results and model count display.
 
-- **Data Pipeline** – Python scrapers, Hugging Face sync logs, PostgreSQL storage, incremental jobs, and a 247-case backend test suite (see [Testing](#testing)).
+- **Data Pipeline** – Python scrapers, Hugging Face sync logs, PostgreSQL storage, incremental jobs, and a 456-case backend test suite (see [Testing](#testing)).
 
 - **Operational Visibility** – In-process latency/success metrics with text and JSON reports; provider avatar blobs cached in PostgreSQL. No distributed cache or multi-instance metrics aggregation.
 
@@ -38,7 +38,7 @@ flowchart LR
 **Key Components**:
 - **Data Ingestion**: Python scrapers fetch models from Hugging Face and OpenRouter. Hugging Face jobs write a `sync_log` row per run; the OpenRouter jobs currently do not (known gap).
 - **Real-time Web Search**: Optional Brave Search API context for recent announcements and benchmarks; disabled in `.env.example` until a key is configured.
-- **Leaderboard Enrichment**: Three clients (SWE-bench, LMSYS Arena, HF Leaderboard) exist, but online lookup is disabled by default. `model_arena_info` has no automated writer — scores currently have to be imported with the manual CLI (`scripts/update_arena_scores.py`).
+- **Leaderboard Enrichment**: arena scores are synced from two real sources — LMArena (via the `lmarena-ai/leaderboard-dataset` HF dataset, read as parquet) and SWE-bench (the JSON embedded in `swebench.com`) — by `scripts/sync_arena_scores.py`, which matches leaderboard names onto catalogue `model_id`s and upserts `model_arena_info`. The three legacy in-process clients (SWE-bench / LMSYS Arena / HF Leaderboard) still exist but are disabled by default.
 - **AI Analysis**: DeepSeek LLM generates model descriptions from catalogue data and, when enabled, web/leaderboard context.
 - **Milestone Detection**: Four-branch heuristic (strong keywords → weak-keyword pairs → timeline rank → leaderboard rank) identifies pivotal models; the leaderboard branch is inert until arena data exists.
 - **Observability**: `PerformanceMonitor` keeps a bounded in-process sample window; `performance_reporter` renders text/JSON reports. There is no distributed latency tracking or cache-hit metric.
@@ -47,8 +47,9 @@ flowchart LR
 
 These are deliberate, documented limitations, not claims of completeness:
 
-- **Leaderboard lookup is off by default** (`ENABLE_LEADERBOARD_LOOKUP=false`). The three upstream clients can take ~70s combined, far beyond the 30s per-model analysis budget, and the LMSYS/HF clients return hard-coded sample rankings when their upstream fails.
-- **`model_arena_info` is not populated automatically.** The aggregator's `sync_to_database()` is a TODO with no callers; the only write path is the local `scripts/update_arena_scores.py` CLI. Until scores are imported, the arena UI stays empty and the leaderboard milestone branch never fires.
+- **The legacy leaderboard lookup is off by default** (`ENABLE_LEADERBOARD_LOOKUP=false`). The three upstream clients can take ~70s combined, far beyond the 30s per-model analysis budget; when an upstream fails they now return empty results with a WARNING instead of hard-coded sample rankings (the mocks were removed in `c9327ec`).
+- **Arena sync is a scheduled job, not a request-time lookup.** Scores only move when `scripts/sync_arena_scores.py` runs (weekly on the data-pipeline machine). About a quarter of leaderboard entries still have no catalogue match, so the arena UI is empty for those models.
+- **Ingestion runs once a day, not hourly.** Each model currently costs ~1.3s of database round-trips on write, so a full pass takes about an hour; raising the frequency needs the batch-write change tracked in the local issue archive.
 - **OpenRouter ingestion does not write `sync_log`.** Only the Hugging Face scrapers record runs.
 - **Metrics are per-process.** There is no Redis, no distributed cache, and no aggregation across API instances. `LEADERBOARD_CACHE_TTL` is not read by any code.
 - **The test suite used to hit the real network.** Three leaderboard tests mocked only one of three clients, so the other two attempted live requests, timed out, and fell back to sample data — 206s instead of 0.06s, with order-dependent failures. All clients are mocked now; tests must stay hermetic.
@@ -58,6 +59,11 @@ These are deliberate, documented limitations, not claims of completeness:
 - Python 3.11+ (CI uses 3.12) and Node.js 20+
 - PostgreSQL 14+ with a database you can administer
 - (Optional) Hugging Face access token for higher rate limits
+
+**Secrets**: every credential (database URL, HF token, DeepSeek key) is read from the
+environment / a local `.env` file that is git-ignored. The repository contains only
+placeholder templates (`.env.example`, `backend/.env.example`, `frontend/.env.example`);
+no key, token or connection string with real credentials is committed.
 
 ### 1. Backend
 ```bash
@@ -136,11 +142,11 @@ python -m src.scraper.fetch_models_openrouter
 # OpenRouter (daily/partial)
 python -m src.scraper.fetch_models_openrouter_incr_day
 
-# Warm the in-process leaderboard cache (does not persist; DB sync is still a TODO)
+# Legacy: warm the in-process leaderboard cache (no DB write; the real DB path is sync_arena_scores.py)
 python scripts/update_leaderboards.py
 
-# Import arena scores manually (the only write path for model_arena_info)
-python scripts/update_arena_scores.py scores.json
+# Sync arena scores from LMArena + SWE-bench into model_arena_info
+python scripts/sync_arena_scores.py --source all
 
 # Re-analyze and update existing models (periodically or on demand)
 python -m src.scraper.reanalyze_models --older-than-days 7 --no-confirm
@@ -178,7 +184,7 @@ export TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/silicon_river_tes
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The backend suite collects **247 cases and takes about 20 seconds** (`247 passed`).
+The backend suite collects **456 cases and takes about 22 seconds** (`456 passed`).
 
 Two history notes, because both caused real confusion:
 
@@ -203,7 +209,7 @@ frontend/             React + Vite single-page app (Timeline3D, filters)
 scripts/              Database bootstrap and maintenance CLIs
 src/scraper/          Hugging Face and OpenRouter ingestion jobs
 src/analysis/         AI-enhanced analysis (Brave Search, leaderboards, milestone detection)
-tests/                Pytest suite (247 backend cases)
+tests/                Pytest suite (456 backend cases)
 .github/workflows/    CI (backend pytest + frontend build)
 .env.example          Environment variable template
 requirements.txt      Runtime Python dependencies

@@ -116,9 +116,20 @@ flowchart LR
 `id` / `model_id` / `source` / `rank` / `score` / `category` / `updated_at` / `created_at`，
 唯一键 `(model_id, source, category)`。
 
-⚠️ **目前没有任何自动化数据来源**（落库环节是空壳 TODO），
-写入端只有需要人工喂 JSON 的 CLI `scripts/update_arena_scores.py`。
+写入端是 `scripts/sync_arena_scores.py`（ISSUE-001 已接通，commit `c9327ec`）：
+
+- `src/scraper/arena/lmarena.py`：读 HF 数据集 `lmarena-ai/leaderboard-dataset`，
+  优先 `hf_hub_download` + parquet 直读（`text/latest*.parquet`，11k 行 / 约 8 秒），
+  失败才回落 `/rows` 分页（匿名配额常吃 429）；
+- `src/scraper/arena/swebench.py`：抠 `swebench.com` 内嵌的 `#leaderboard-data` JSON；
+- `src/scraper/arena/matcher.py`：榜单名 → `model_id` 五层匹配（人工别名 →
+  归一化全等 → 配置后缀归一 → 尺寸签名分桶的 token 子集 → unmatched），
+  别名表在 `data/arena_aliases.yaml`；
+- 写库用 `executemany` + 300 行一块（逐行 UPSERT 在 Supabase 上是 0.42s/条）。
+
+覆盖率现状：榜单条目约有一半能在库里找到对应模型；找不到的多是库里没有的老模型。
 前端 `ArenaScoreDisplay` 查不到会静默显示为空，不报错。
+`scripts/update_arena_scores.py`（人工喂 JSON）仍保留但已不是主路径。
 
 ### 2.6 `providers`
 
@@ -410,7 +421,7 @@ interface ITimelineMode {
 .venv/bin/python -m pytest tests/ -q
 ```
 
-当前基线：`247 passed`，约 20 秒。
+当前基线：`456 passed`，约 22 秒。
 
 - 2026-10-18 之前是 `148 passed, 33 skipped`：`async def` 用例因为 venv 里没有
   `pytest-asyncio` 只发出 `PytestUnhandledCoroutineWarning` 然后被跳过，**从未真正执行过**。

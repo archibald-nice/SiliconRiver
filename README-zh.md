@@ -4,7 +4,7 @@
 
 Silicon River 汇聚公开发布的大模型目录（Hugging Face、OpenRouter），可选地用 Brave 网络搜索和三个排行榜客户端做增强，应用基于关键词与排名的**里程碑判定策略**，最后通过交互式 **3D 螺旋时间轴**呈现，支持过滤和悬浮提示。
 
-**最新增强（Phase 4，2025年11月）**：进程内性能指标、可选排行榜客户端（SWE-bench、LMSYS Arena、HF Leaderboard）、以及四分支里程碑检测。排行榜在线查询**默认关闭**：上游接口要么慢、要么不稳定，且其中两个客户端在上游失败时会回落到写死的示例排名（见[已知缺口](#已知缺口)）。
+**最新增强（Phase 5，2026年10月）**：真实的 arena 评分——由 `scripts/sync_arena_scores.py` 从 **LMArena**（HF `lmarena-ai/leaderboard-dataset`）与 **SWE-bench** 导入；全链路 UTC `timestamptz`；HF 抓取按 `pipeline_tag` 过滤；测试套件完全不碰网络。那三个老的进程内排行榜客户端仍**默认关闭**（见[已知缺口](#已知缺口)）。
 
 _English version available at [README.md](README.md)._
 
@@ -18,7 +18,7 @@ _English version available at [README.md](README.md)._
 
 - **过滤优先的用户体验** – 时间范围（30天/6月/1年/全部）、年份、提供商、文本搜索和开源筛选，即时显示结果和模型数量。
 
-- **数据管道** – Python 抓取脚本、Hugging Face 同步日志、PostgreSQL 存储、增量任务，以及 247 条后端测试用例（见[测试](#测试)）。
+- **数据管道** – Python 抓取脚本、同步日志、PostgreSQL 存储、增量任务，以及 456 条后端测试用例（见[测试](#测试)）。
 
 - **可观测性** – 进程内延迟/成功率指标，支持文本和 JSON 报告；提供商头像二进制缓存在 PostgreSQL。没有分布式缓存，也不做多实例指标聚合。
 
@@ -39,7 +39,7 @@ flowchart LR
 
 - **数据摄取**：Python 抓取脚本从 Hugging Face 和 OpenRouter 抓取模型。Hugging Face 任务每次运行写一行 `sync_log`；OpenRouter 任务目前不写（已知缺口）。
 - **实时网络搜索**：可选的 Brave Search API 上下文，用于最新公告和基准测试；`.env.example` 里默认关闭，直到配置 Key。
-- **排行榜增强**：存在三个客户端（SWE-bench、LMSYS Arena、HF Leaderboard），但在线查询默认关闭。`model_arena_info` 没有自动写入方——评分目前只能用本地 CLI（`scripts/update_arena_scores.py`）手动导入。
+- **排行榜增强**：arena 评分来自两个真实数据源——LMArena（HF `lmarena-ai/leaderboard-dataset`，按 parquet 直读）与 SWE-bench（`swebench.com` 内嵌 JSON）——由 `scripts/sync_arena_scores.py` 把榜单名匹配到库里的 `model_id` 并 upsert 进 `model_arena_info`。那三个老的进程内客户端仍存在，但默认关闭。
 - **AI 分析**：DeepSeek LLM 基于模型目录数据（以及启用后的网络/排行榜上下文）生成模型描述。
 - **里程碑检测**：四分支策略（强关键词 → 弱关键词组合 → 时间轴排名 → 排行榜排名）识别关键模型；排行榜分支在 arena 数据导入前不会生效。
 - **可观测性**：`PerformanceMonitor` 维护一个有界的进程内样本窗口，`performance_reporter` 输出文本/JSON 报告。没有分布式延迟追踪，也没有缓存命中率指标。
@@ -48,8 +48,9 @@ flowchart LR
 
 以下是明确记录的限制，不是"功能完备"的声明：
 
-- **排行榜在线查询默认关闭**（`ENABLE_LEADERBOARD_LOOKUP=false`）。三个上游客户端串起来约 70 秒，远超单模型 30 秒的分析预算；且 LMSYS/HF 客户端在上游失败时会返回写死的示例排名。
-- **`model_arena_info` 不会自动填充。** 聚合器的 `sync_to_database()` 仍是 TODO 且没有调用方；唯一写入口是本地 `scripts/update_arena_scores.py` CLI。在评分导入之前，arena 界面一直为空，里程碑的排行榜分支永远不会命中。
+- **老的排行榜在线查询默认关闭**（`ENABLE_LEADERBOARD_LOOKUP=false`）。三个上游客户端串起来约 70 秒，远超单模型 30 秒的分析预算；上游失败时现在返回空结果 + WARNING，不再回落写死的示例排名（假数据已在 `c9327ec` 删除）。
+- **arena 同步是定时任务，不是请求时查询。** 分数只在 `scripts/sync_arena_scores.py` 运行时更新（产线上每周一次）；榜单上仍有约四分之一条目在库里找不到对应模型，这些模型的 arena 面板为空。
+- **抓取每天跑一次，不是每小时。** 目前每个模型写库要约 1.3 秒往返，全量一轮约一小时；提高频率需要先做批量写改造（本地 issue 档有记录）。
 - **OpenRouter 抓取不写 `sync_log`。** 只有 Hugging Face 抓取脚本记录运行。
 - **指标是单进程的。** 没有 Redis、没有分布式缓存、也没有跨 API 实例的聚合；`LEADERBOARD_CACHE_TTL` 没有任何代码读取。
 - **测试套件曾经依赖真实网络。** 三个排行榜用例只 mock 了三个客户端中的一个，另外两个会真发请求、超时后回落到示例数据——耗时 206 秒而不是 0.06 秒，还会因执行顺序偶发失败。现在全部 mock，测试必须保持离线自洽。
@@ -60,6 +61,12 @@ flowchart LR
 
 - Python 3.11+（CI 用 3.12）和 Node.js 20+
 - PostgreSQL 14+ 数据库（需有管理员权限）
+- （可选）Hugging Face access token，用于提高限流额度
+
+**密钥**：所有凭据（数据库连接串、HF token、DeepSeek key）都从环境变量或本机
+`.env` 读取，而 `.env` 已被 git 忽略。仓库里只有占位模板
+（`.env.example`、`backend/.env.example`、`frontend/.env.example`），
+**不含任何真实密钥、token 或带凭据的连接串**。
 - （可选）Hugging Face 访问令牌，用于提升抓取速率
 
 ### 1. 后端配置
@@ -154,11 +161,11 @@ bash scripts/daily_sync.sh
 # 数据库体检：确认表建好、数据到位
 python scripts/check_supabase.py
 
-# 预热进程内排行榜缓存（不落库；落库同步仍是 TODO）
+# 老路径：预热进程内排行榜缓存（不写库；真正的落库同步走 sync_arena_scores.py）
 python scripts/update_leaderboards.py
 
-# 手动导入 arena 评分（model_arena_info 目前唯一的写入口）
-python scripts/update_arena_scores.py scores.json
+# 从 LMArena + SWE-bench 同步 arena 评分进 model_arena_info
+python scripts/sync_arena_scores.py --source all
 
 # 重新分析和更新已有模型（定期或按需运行）
 python -m src.scraper.reanalyze_models --older-than-days 7 --no-confirm
@@ -197,7 +204,7 @@ export TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/silicon_river_tes
 .venv/bin/python -m pytest tests/ -q
 ```
 
-后端测试共收集 **247 条用例，跑完约 20 秒**（`247 passed`）。
+后端测试共收集 **456 条用例，跑完约 22 秒**（`456 passed`）。
 
 两件值得记住的历史：
 
@@ -223,7 +230,7 @@ frontend/             React + Vite 单页应用（Timeline3D、筛选）
 scripts/              数据库初始化与维护 CLI
 src/scraper/          Hugging Face 和 OpenRouter 抓取程序
 src/analysis/         AI 增强分析（Brave Search、排行榜、里程碑检测）
-tests/                Pytest 测试套件（247 条后端用例）
+tests/                Pytest 测试套件（456 条后端用例）
 .github/workflows/    CI（后端 pytest + 前端构建）
 .env.example          环境变量模板
 requirements.txt      运行时 Python 依赖
