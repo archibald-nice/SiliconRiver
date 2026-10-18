@@ -116,12 +116,17 @@ def resolve_pipeline_tag() -> str:
 
 
 def build_list_models_kwargs(provider: str, limit: int | None) -> dict:
-    """构造 `HfApi.list_models` 的参数，按 pipeline_tag 过滤（ISSUE-031 前置）。
+    """构造 `HfApi.list_models` 的参数，按 ``pipeline_tag`` 过滤（ISSUE-031 前置）。
 
-    huggingface_hub 0.35.3 的 `list_models` 签名是
-    ``filter: Union[str, Iterable[str], None] = None``，内部 ``if filter:`` 为假就
-    不往 query string 里放 filter，所以空 tag 时宁可**不传这个 kwarg**：语义上是
-    「不过滤」，也不会因为传空串让调用方误以为过滤生效了。
+    这里刻意用 ``pipeline_tag=`` 而不是 ``filter=``：后者是**标签**过滤，而作者
+    常常给非 LLM 仓库也打 ``text-generation`` 标签（实测 Qwen3-Embedding 的
+    ``pipeline_tag`` 是 feature-extraction 却带着 text-generation 标签，
+    tencent/HunyuanImage-3.0 是 text-to-image 也带该标签），用 ``filter=`` 会把
+    它们一起收进来。``pipeline_tag=`` 按任务分类过滤，实测 Qwen 的 embedding
+    仓库降到 0 条。
+
+    空 tag 时**不传这个 kwarg**（``if pipeline_tag:``）：语义上是「不过滤」，
+    也不会因为传空串让调用方误以为过滤生效了。
     """
     kwargs: dict = {
         "author": provider,
@@ -138,7 +143,7 @@ def build_list_models_kwargs(provider: str, limit: int | None) -> dict:
             provider,
             pipeline_tag,
         )
-        kwargs["filter"] = pipeline_tag
+        kwargs["pipeline_tag"] = pipeline_tag
     else:
         LOGGER.info(
             "Provider %s：HF_PIPELINE_TAG 为空，未过滤，会包含非 LLM 仓库", provider

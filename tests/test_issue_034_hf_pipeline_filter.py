@@ -1,7 +1,7 @@
 """ISSUE-034 回归测试：HF pipeline_tag 过滤 / 分阶段计时 / models.source 写入。
 
 被守的行为：
-  ① `client.list_models` 默认带 `filter="text-generation"`（ISSUE-031 前置：
+  ① `client.list_models` 默认带 `pipeline_tag="text-generation"`（ISSUE-031 前置：
      不带 filter 时 HF 会把该 org 的全部仓库拉回来，nvidia 975 个里只有 269 个是
      text-generation，视觉/语音仓库会污染时间轴）；`HF_PIPELINE_TAG=""` 时不带这个 kwarg。
   ② 每个 provider 结束（含异常中断）都要打一条分阶段计时汇总，形如
@@ -155,7 +155,7 @@ def test_list_models_defaults_to_text_generation_filter(monkeypatch):
 
     kwargs = client.list_models_kwargs
     assert kwargs is not None
-    assert kwargs["filter"] == "text-generation"
+    assert kwargs["pipeline_tag"] == "text-generation"
     assert kwargs["author"] == "meta-llama"
     assert kwargs["limit"] == 10
     assert kwargs["full"] is True
@@ -167,17 +167,17 @@ def test_pipeline_tag_env_override(monkeypatch):
         monkeypatch, [_make_model("meta-llama/Llama-1")], pipeline_tag="automatic-speech-recognition"
     )
 
-    assert client.list_models_kwargs["filter"] == "automatic-speech-recognition"
+    assert client.list_models_kwargs["pipeline_tag"] == "automatic-speech-recognition"
 
 
 def test_empty_pipeline_tag_sends_no_filter_kwarg(monkeypatch):
-    """HF_PIPELINE_TAG="" 表示不过滤：连 filter 这个 kwarg 都不能传。"""
+    """HF_PIPELINE_TAG="" 表示不过滤：连 pipeline_tag 这个 kwarg 都不能传。"""
     client, _conn = _run_hf_fetch(
         monkeypatch, [_make_model("meta-llama/Llama-1")], pipeline_tag=""
     )
 
     kwargs = client.list_models_kwargs
-    assert "filter" not in kwargs
+    assert "pipeline_tag" not in kwargs and "filter" not in kwargs
     assert kwargs["author"] == "meta-llama"
 
 
