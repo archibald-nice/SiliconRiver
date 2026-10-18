@@ -15,7 +15,11 @@ import psycopg
 import requests
 from dotenv import load_dotenv
 
-from src.scraper.fetch_models import resolve_case_variant
+from src.scraper.fetch_models import (
+    SOURCE_OPENROUTER,
+    StageTimer,
+    resolve_case_variant,
+)
 
 try:
     from scripts.init_db import create_schema  # type: ignore
@@ -266,8 +270,8 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                 INSERT INTO models (
                     model_id, provider, model_name, description, tags,
                     created_at, downloads, likes, model_card_url, inserted_at,
-                    price, is_open_source, huggingface_rank
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    price, is_open_source, huggingface_rank, source
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (model_id) DO UPDATE SET
                     provider = CASE
                         WHEN lower(models.provider) = lower(EXCLUDED.provider) THEN models.provider
@@ -281,7 +285,11 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     inserted_at = EXCLUDED.inserted_at,
                     price = COALESCE(EXCLUDED.price, models.price),
                     is_open_source = EXCLUDED.is_open_source,
-                    huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank)
+                    huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank),
+                    -- 来源只认「首个已知值」：跨源合并行（HF 与 OpenRouter 写同一 model_id
+                    -- 或大小写归一后落到同一行）不要互相覆盖，否则每日固定「先 HF 后 OR」
+                    -- 会让所有合并行的 source 恒为 openrouter，ISSUE-004 判源就失效了。
+                    source = COALESCE(NULLIF(models.source, 'unknown'), EXCLUDED.source)
                 RETURNING (xmax = 0) AS is_insert
                 """,
                 (
@@ -298,6 +306,7 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     json.dumps(record.price, ensure_ascii=False) if record.price is not None else None,
                     record.is_open_source,
                     record.huggingface_rank,
+                    SOURCE_OPENROUTER,
                 ),
             )
             # 同 fetch_models.py：rowcount 在 ON CONFLICT DO UPDATE 下恒为 1，
@@ -406,24 +415,43 @@ def fetch_and_store(endpoint: str | None = None, *, limit: int | None = None) ->
     load_config()
     endpoint_url = endpoint or os.getenv("OPENROUTER_MODELS_URL", DEFAULT_ENDPOINT)
     providers_filter = get_providers(os.getenv("PROVIDERS_OPENROUTER"))
-    raw_models = fetch_remote_models(endpoint_url)
-    # ISSUE-030：白名单过滤必须在 limit 截断之前，limit 只是过滤后的安全阀。
-    selected_models, _selection = select_models(raw_models, providers_filter, limit)
-
+    # ISSUE-034：分两段计时（上游拉取 / 写库），异常退出也能看出卡在哪一段。
+    timer = StageTimer("fetch", "write")
+    selected_models: List[dict] = []
     results: dict[str, tuple[int, int]] = {}
-    with ensure_db() as conn:
-        for item in selected_models:
-            record = to_record(item)
-            provider_key = record.provider
-            provider_display = (item.get("name") or provider_key).split(":", 1)[0].strip()
-            if not provider_display and record.model_id and "/" in record.model_id:
-                provider_display = record.model_id.split("/", 1)[0].strip()
-            provider_display = provider_display or provider_key
-            upsert_provider(conn, provider_id=provider_key, display_name=provider_display)
-            processed, inserted = save_models(conn, provider_key, [record])
-            existing = results.get(provider_key, (0, 0))
-            results[provider_key] = (existing[0] + processed, existing[1] + inserted)
-    return results
+    finished = False
+    try:
+        timer.begin("fetch")
+        raw_models = fetch_remote_models(endpoint_url)
+        # ISSUE-030：白名单过滤必须在 limit 截断之前，limit 只是过滤后的安全阀。
+        selected_models, _selection = select_models(raw_models, providers_filter, limit)
+
+        # 写库段包含 ensure_db()（建表检查 + 建连）与逐条 upsert。
+        timer.begin("write")
+        with ensure_db() as conn:
+            for item in selected_models:
+                record = to_record(item)
+                provider_key = record.provider
+                provider_display = (item.get("name") or provider_key).split(":", 1)[0].strip()
+                if not provider_display and record.model_id and "/" in record.model_id:
+                    provider_display = record.model_id.split("/", 1)[0].strip()
+                provider_display = provider_display or provider_key
+                upsert_provider(conn, provider_id=provider_key, display_name=provider_display)
+                processed, inserted = save_models(conn, provider_key, [record])
+                existing = results.get(provider_key, (0, 0))
+                results[provider_key] = (existing[0] + processed, existing[1] + inserted)
+        timer.stop()
+        finished = True
+        return results
+    finally:
+        suffix = "" if finished else f"（中断于 {timer.current or '?'} 段）"
+        LOGGER.info(
+            "OpenRouter 计时%s: %s 共 %.1fs（%s 个模型）",
+            suffix,
+            timer.describe(("fetch", "write")),
+            timer.total,
+            len(selected_models),
+        )
 
 
 if __name__ == "__main__":

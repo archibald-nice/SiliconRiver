@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -46,6 +47,20 @@ DESCRIPTION_CONCURRENCY = int(os.getenv("DESCRIPTION_CONCURRENCY", "8"))
 DESCRIPTION_TIMEOUT = float(os.getenv("DESCRIPTION_TIMEOUT", "10"))
 DESCRIPTION_MAX_CHARS = int(os.getenv("DESCRIPTION_MAX_CHARS", "300"))
 
+# ---------- pipeline_tag 过滤（ISSUE-031 前置）----------
+# 不带 filter 时 HF 会把该 org 的**全部**仓库拉回来（实测 nvidia 975 个仓库里只有
+# 269 个是 text-generation），视觉/语音仓库会一起进时间轴。默认只抓 text-generation；
+# 设成空字符串表示不过滤（拿全量）。
+DEFAULT_PIPELINE_TAG = "text-generation"
+
+# ---------- models.source 取值域 ----------
+# ISSUE-004 跨源去重的依据：同一模型可能既有 HF 行又有 OpenRouter 行。
+# 列定义与默认值见 scripts/init_db.py（列由建表侧负责，本文件只负责写入）。
+#   值域：huggingface / openrouter / unknown
+SOURCE_HUGGINGFACE = "huggingface"
+SOURCE_OPENROUTER = "openrouter"
+SOURCE_UNKNOWN = "unknown"
+
 
 @dataclass(slots=True)
 class ModelRecord:
@@ -86,6 +101,49 @@ def hf_client() -> HfApi:
     if not token:
         LOGGER.warning("HF_TOKEN is not set; unauthenticated requests may be rate-limited.")
     return HfApi(token=token)
+
+
+def resolve_pipeline_tag() -> str:
+    """读 `HF_PIPELINE_TAG`（ISSUE-031 前置）。
+
+    未设置 → 默认 ``DEFAULT_PIPELINE_TAG``（text-generation）；显式设成空字符串
+    → 返回 ""，表示不过滤、把该 org 的全部仓库（含视觉/语音）都抓回来。
+    """
+    raw = os.getenv("HF_PIPELINE_TAG")
+    if raw is None:
+        return DEFAULT_PIPELINE_TAG
+    return raw.strip()
+
+
+def build_list_models_kwargs(provider: str, limit: int | None) -> dict:
+    """构造 `HfApi.list_models` 的参数，按 pipeline_tag 过滤（ISSUE-031 前置）。
+
+    huggingface_hub 0.35.3 的 `list_models` 签名是
+    ``filter: Union[str, Iterable[str], None] = None``，内部 ``if filter:`` 为假就
+    不往 query string 里放 filter，所以空 tag 时宁可**不传这个 kwarg**：语义上是
+    「不过滤」，也不会因为传空串让调用方误以为过滤生效了。
+    """
+    kwargs: dict = {
+        "author": provider,
+        "sort": "lastModified",
+        "direction": -1,
+        "limit": limit,
+        "full": True,
+    }
+    pipeline_tag = resolve_pipeline_tag()
+    if pipeline_tag:
+        LOGGER.info(
+            "Provider %s：按 pipeline_tag=%s 过滤（只抓该任务的仓库，避免视觉/语音等"
+            "非 LLM 仓库污染时间轴）",
+            provider,
+            pipeline_tag,
+        )
+        kwargs["filter"] = pipeline_tag
+    else:
+        LOGGER.info(
+            "Provider %s：HF_PIPELINE_TAG 为空，未过滤，会包含非 LLM 仓库", provider
+        )
+    return kwargs
 
 
 def normalise_datetime(value: datetime | str | None) -> datetime:
@@ -592,8 +650,8 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                 INSERT INTO models (
                     model_id, provider, model_name, description, tags,
                     created_at, downloads, likes, model_card_url, inserted_at,
-                    is_open_source, price, huggingface_rank
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    is_open_source, price, huggingface_rank, source
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (model_id) DO UPDATE SET
                     provider = CASE
                         WHEN lower(models.provider) = lower(EXCLUDED.provider) THEN models.provider
@@ -609,7 +667,11 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     inserted_at = EXCLUDED.inserted_at,
                     is_open_source = EXCLUDED.is_open_source,
                     price = COALESCE(EXCLUDED.price, models.price),
-                    huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank)
+                    huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank),
+                    -- 来源只认「首个已知值」：跨源合并行（HF 与 OpenRouter 写同一 model_id
+                    -- 或大小写归一后落到同一行）不要互相覆盖，否则每日固定「先 HF 后 OR」
+                    -- 会让所有合并行的 source 恒为 openrouter，ISSUE-004 判源就失效了。
+                    source = COALESCE(NULLIF(models.source, 'unknown'), EXCLUDED.source)
                 RETURNING (xmax = 0) AS is_insert
                 """,
                 (
@@ -626,6 +688,7 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     record.is_open_source,
                     json.dumps(record.price, ensure_ascii=False) if record.price is not None else None,
                     record.huggingface_rank,
+                    SOURCE_HUGGINGFACE,
                 ),
             )
             # 不能用 cursor.rowcount：ON CONFLICT DO UPDATE 下它无论新增还是更新都是 1，
@@ -669,6 +732,72 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
     return processed, inserted
 
 
+class StageTimer:
+    """分阶段累计耗时（ISSUE-034）。
+
+    用来回答「生产 16 分钟 vs 本地 29 秒，瓶颈在哪一段」：原来只有一行
+    `processed=/inserted=`，拉列表、读 README、写库三段耗时全糊在一起。
+
+    用法::
+
+        timer = StageTimer("profile", "list", "readme", "write")
+        timer.begin("list")
+        ...
+        timer.begin("readme")   # 进入新阶段时自动结算上一段
+        ...
+        timer.stop()
+
+    异常中途退出时不用 ``stop()``：``current`` 指出卡在哪一段，``describe()`` /
+    ``total`` 会把**正在跑的那一段**按此刻已耗时间算进去（只读取，不改状态）。
+    """
+
+    __slots__ = ("_totals", "_current", "_started")
+
+    def __init__(self, *stages: str) -> None:
+        self._totals: dict[str, float] = {name: 0.0 for name in stages}
+        self._current: str | None = None
+        self._started = 0.0
+
+    def begin(self, name: str) -> None:
+        """进入 ``name`` 阶段（先结算上一个尚未结算的阶段）。"""
+        now = time.perf_counter()
+        self._close(now)
+        self._totals.setdefault(name, 0.0)
+        self._current = name
+        self._started = now
+
+    def stop(self) -> None:
+        """结算当前阶段（正常收尾时调用）。"""
+        self._close(time.perf_counter())
+        self._current = None
+
+    def _close(self, now: float) -> None:
+        if self._current is not None:
+            self._totals[self._current] = self._totals.get(self._current, 0.0) + (now - self._started)
+
+    @property
+    def current(self) -> str | None:
+        """当前（或异常中断时停在的）阶段名。"""
+        return self._current
+
+    def _snapshot(self) -> dict[str, float]:
+        totals = dict(self._totals)
+        if self._current is not None:
+            totals[self._current] = totals.get(self._current, 0.0) + (
+                time.perf_counter() - self._started
+            )
+        return totals
+
+    @property
+    def total(self) -> float:
+        return sum(self._snapshot().values())
+
+    def describe(self, order: Iterable[str]) -> str:
+        """按 ``order`` 输出 `list=53.3s readme=0.2s ...` 形式的片段。"""
+        totals = self._snapshot()
+        return " ".join(f"{name}={totals.get(name, 0.0):.1f}s" for name in order)
+
+
 def fetch_and_store(limit: int = 50) -> dict[str, tuple[int, int]]:
     """按 PROVIDERS 逐家抓 HF 模型。
 
@@ -687,50 +816,69 @@ def fetch_and_store(limit: int = 50) -> dict[str, tuple[int, int]]:
     with ensure_db() as conn:
         for provider in providers:
             LOGGER.info("Fetching models for provider %s", provider)
-            display_name, avatar_url = resolve_provider_profile(client, provider)
-            avatar_content, avatar_mime = download_provider_avatar(avatar_url, token)
+            # ISSUE-034：分阶段计时，异常退出也要能看出卡在哪一段。
+            timer = StageTimer("profile", "list", "readme", "write")
+            model_count = 0
+            finished = False
             try:
-                upsert_provider(conn, provider, avatar_url, display_name, avatar_content, avatar_mime)
-            except Exception as exc:  # pragma: no cover - database failure
-                LOGGER.warning("Failed to upsert provider %s metadata: %s", provider, exc)
-            models_iter = client.list_models(
-                author=provider,
-                sort="lastModified",
-                direction=-1,
-                limit=effective_limit,
-                full=True,
-            )
-            # 必须先物化：拉 README 简介需要先拿到全部 model_id 才能并发
-            infos = list(models_iter)
-            if effective_limit is not None and len(infos) >= effective_limit:
-                LOGGER.warning(
-                    "Provider %s：抓取窗口 %s 条已用满，大概率还有模型被截断"
-                    "（HF_DAILY_FETCH_LIMIT，设 0 表示不限）",
-                    provider,
-                    effective_limit,
-                )
+                timer.begin("profile")
+                display_name, avatar_url = resolve_provider_profile(client, provider)
+                avatar_content, avatar_mime = download_provider_avatar(avatar_url, token)
+                try:
+                    upsert_provider(conn, provider, avatar_url, display_name, avatar_content, avatar_mime)
+                except Exception as exc:  # pragma: no cover - database failure
+                    LOGGER.warning("Failed to upsert provider %s metadata: %s", provider, exc)
 
-            # 只给「还没有简介」的模型拉 README。
-            #   首次抓取：492 个全拉；
-            #   后续 daily_sync：绝大多数已有简介，跳过，避免每天白跑上千次请求。
-            existing = load_existing_descriptions(conn, provider)
-            missing = [info.modelId for info in infos if not existing.get(info.modelId)]
-            if missing:
+                timer.begin("list")
+                models_iter = client.list_models(
+                    **build_list_models_kwargs(provider, effective_limit)
+                )
+                # 必须先物化：拉 README 简介需要先拿到全部 model_id 才能并发
+                infos = list(models_iter)
+                model_count = len(infos)
+                if effective_limit is not None and model_count >= effective_limit:
+                    LOGGER.warning(
+                        "Provider %s：抓取窗口 %s 条已用满，大概率还有模型被截断"
+                        "（HF_DAILY_FETCH_LIMIT，设 0 表示不限）",
+                        provider,
+                        effective_limit,
+                    )
+
+                timer.begin("readme")
+                # 只给「还没有简介」的模型拉 README。
+                #   首次抓取：492 个全拉；
+                #   后续 daily_sync：绝大多数已有简介，跳过，避免每天白跑上千次请求。
+                existing = load_existing_descriptions(conn, provider)
+                missing = [info.modelId for info in infos if not existing.get(info.modelId)]
+                if missing:
+                    LOGGER.info(
+                        "Provider %s：%s 个模型需要拉简介（已有 %s 个可跳过）",
+                        provider, len(missing), len(infos) - len(missing),
+                    )
+                fetched = fetch_descriptions(missing, token=token)
+                descriptions = {**existing, **fetched}
+
+                timer.begin("write")
+                started_at = datetime.now(timezone.utc)
+                records = (
+                    to_record(provider, info, description=descriptions.get(info.modelId))
+                    for info in infos
+                )
+                processed, inserted = save_models(conn, provider, records, started_at=started_at)
+                timer.stop()
+                finished = True
+                LOGGER.info("Provider %s: processed=%s inserted=%s", provider, processed, inserted)
+                results[provider] = (processed, inserted)
+            finally:
+                suffix = "" if finished else f"（中断于 {timer.current or '?'} 段）"
                 LOGGER.info(
-                    "Provider %s：%s 个模型需要拉简介（已有 %s 个可跳过）",
-                    provider, len(missing), len(infos) - len(missing),
+                    "Provider %s 计时%s: %s 共 %.1fs（%s 个模型）",
+                    provider,
+                    suffix,
+                    timer.describe(("list", "readme", "write", "profile")),
+                    timer.total,
+                    model_count,
                 )
-            fetched = fetch_descriptions(missing, token=token)
-            descriptions = {**existing, **fetched}
-
-            started_at = datetime.now(timezone.utc)
-            records = (
-                to_record(provider, info, description=descriptions.get(info.modelId))
-                for info in infos
-            )
-            processed, inserted = save_models(conn, provider, records, started_at=started_at)
-            LOGGER.info("Provider %s: processed=%s inserted=%s", provider, processed, inserted)
-            results[provider] = (processed, inserted)
     return results
 
 
