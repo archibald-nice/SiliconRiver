@@ -85,13 +85,6 @@ export interface ModelAnalysis {
   updated_at?: string;
 }
 
-export interface AnalyzedModelsResponse {
-  items: ModelAnalysis[];
-  total: number;
-  page: number;
-  page_size: number;
-}
-
 /**
  * 拉取厂商统计（`/api/stats/providers`）。
  * **仍在用**：`frontend/src/pages/HomeWithAnalysis.tsx` 用它生成左侧厂商筛选列表。
@@ -158,35 +151,5 @@ export const getApiErrorStatus = (error: unknown): number | undefined => {
  */
 export const fetchModelAnalysis = async (modelId: string) => {
   const { data } = await api.post<ModelAnalysis>("/api/models/analysis", { model_id: modelId });
-  return data;
-};
-
-/**
- * 获取已分析的模型列表。
- */
-export const fetchAnalyzedModels = async (params: {
-  page?: number;
-  page_size?: number;
-  provider?: string;
-  feature?: string;
-  search?: string;
-}) => {
-  const query: Record<string, unknown> = {};
-  if (typeof params.page === "number") {
-    query.page = params.page;
-  }
-  if (typeof params.page_size === "number") {
-    query.page_size = params.page_size;
-  }
-  if (params.provider) {
-    query.provider = params.provider;
-  }
-  if (params.feature) {
-    query.feature = params.feature;
-  }
-  if (params.search) {
-    query.search = params.search;
-  }
-  const { data } = await api.get<AnalyzedModelsResponse>("/api/models/analyzed", { params: query });
   return data;
 };
