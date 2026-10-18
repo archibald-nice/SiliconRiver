@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { buildApiUrl } from "../api/client";
 
@@ -37,6 +38,19 @@ const ArenaScoreDisplay = ({
       return (await response.json()) as ArenaScoreSummary;
     },
   });
+
+  // LMArena 有 29 个 category，全列出来会把弹窗拉成一屏半；overall 优先，其余按分数降序，只显示前几个。
+  const DETAIL_LIMIT = 6;
+  const sortedDetails = useMemo(() => {
+    const rows = scores?.details ?? [];
+    return [...rows].sort((a, b) => {
+      if (a.category === "overall" && b.category !== "overall") return -1;
+      if (b.category === "overall" && a.category !== "overall") return 1;
+      return (b.score ?? 0) - (a.score ?? 0);
+    });
+  }, [scores]);
+  const visibleDetails = sortedDetails.slice(0, DETAIL_LIMIT);
+  const hiddenCount = Math.max(0, sortedDetails.length - visibleDetails.length);
 
   // 紧凑模式
   if (layout === "compact") {
@@ -123,7 +137,7 @@ const ArenaScoreDisplay = ({
         <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">
           详细评分
         </p>
-        {scores.details.map((detail, idx) => (
+        {visibleDetails.map((detail, idx) => (
           <div
             key={idx}
             className="flex items-center justify-between rounded-lg bg-slate-700/20 p-3 border border-slate-700/40"
@@ -151,6 +165,9 @@ const ArenaScoreDisplay = ({
             )}
           </div>
         ))}
+        {hiddenCount > 0 && (
+          <p className="text-xs text-slate-500 pt-1">另有 {hiddenCount} 个分类未显示</p>
+        )}
       </div>
 
       {/* 数据源信息 */}

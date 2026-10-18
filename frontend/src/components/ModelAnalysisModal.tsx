@@ -2,6 +2,7 @@ import { Dialog, Transition } from "@headlessui/react";
 import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchModelAnalysis, buildProviderAvatarUrl, getApiErrorStatus } from "../api/client";
+import ArenaScoreDisplay from "./ArenaScoreDisplay";
 
 interface ModelAnalysisModalProps {
   isOpen: boolean;
@@ -284,13 +285,10 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId, modelCreatedAt }: ModelA
                                 </span>
                               </div>
                             </div>
-                            {/* ISSUE-008：行业评分没有数据源——后端 model_arena_info 既没有自动写入
-                                （落库是空壳 TODO、零调用方，见 AGENTS.md 踩坑 4.4），前端也从未接评分接口。
-                                原先固定显示「评分数据加载中…」会让人以为在等一个永远不来的请求，
-                                故改为如实说明暂无数据；等后端有了真实数据源再接接口。 */}
-                            <p className="text-xs text-text-muted text-center py-2">
-                              暂无可用的评分数据
-                            </p>
+                            {/* ISSUE-001/008：model_arena_info 已有真实数据源（scripts/sync_arena_scores.py
+                                拉 LMArena 与 SWE-bench）。这里接回评分组件：没有数据时它自己会显示
+                                「暂无评分数据」，不会再出现永远转圈的「评分数据加载中…」。 */}
+                            <ArenaScoreDisplay modelId={modelId} />
                           </div>
                         </div>
 
