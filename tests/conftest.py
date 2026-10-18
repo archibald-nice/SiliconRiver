@@ -28,6 +28,55 @@ requires_db = pytest.mark.skipif(
 )
 
 
+# ---------------------------------------------------------------------------
+# 网络守门：默认禁止用例访问真实网络（ISSUE-033）
+# ---------------------------------------------------------------------------
+# 这个仓库踩过两次「测试悄悄打真实网络」的坑：排行榜用例三个客户端里只 mock 了
+# 一个，另外两个真发请求，整个文件 206 秒；分析并发用例没替换标签生成器，200 个
+# 模型真打了 200 次 LLM，160 秒。真网络还会让 CI 随机红、把测试结果和上游状态
+# 绑死。与其靠 review 记着 mock，不如默认把外网掐掉：需要真网络时给用例显式加
+# @pytest.mark.allow_network（目前一个都没有）。
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+
+
+def _is_allowed_host(host: object) -> bool:
+    if not isinstance(host, str):
+        return False  # AF_UNIX 路径或其它形态，交给调用方
+    if host in _ALLOWED_HOSTS:
+        return True
+    return host.startswith("127.") or host.startswith("/")
+
+
+@pytest.fixture(autouse=True)
+def _deny_external_network(monkeypatch, request):
+    if request.node.get_closest_marker("allow_network"):
+        return
+
+    import socket
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def _check(address):
+        host = address[0] if isinstance(address, tuple) and address else None
+        if host is not None and not _is_allowed_host(host):
+            raise RuntimeError(
+                f"测试禁止访问真实网络：{address!r}。"
+                "请 mock 掉该调用；确实需要联网时给用例加 @pytest.mark.allow_network"
+            )
+
+    def guarded_connect(sock, address):
+        _check(address)
+        return real_connect(sock, address)
+
+    def guarded_connect_ex(sock, address):
+        _check(address)
+        return real_connect_ex(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+
+
 def _assert_safe_test_db(url: str) -> None:
     """防止把测试指向开发库或生产库后被清表。"""
     name = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]

@@ -90,13 +90,28 @@ class _RecordingAnalyzer:
         return results
 
 
+class _StubTagGenerator:
+    """假标签生成器：真的 TagGenerator 会读 .env 里的 API key 并发起真实请求。
+
+    本文件测的是并发契约，标签生成只是写库前的一个过场；不替换的话，200 个模型
+    会真打 200 次 LLM（实测 160 秒，占整个测试套件九成时间）。
+    """
+
+    calls = 0
+
+    def generate_tags(self, **_kwargs):
+        type(self).calls += 1
+        return ["stub"]
+
+
 def _make_integration(analyzer, monkeypatch, save_ok: bool = True):
-    """构造 AnalysisIntegration，并把写库替换成记录器。
+    """构造 AnalysisIntegration，并把写库与标签生成都替换成记录器。
 
     返回 (integration, written)，written 里是每次“写库”收到的 kwargs。
     """
     integration = AnalysisIntegration(db_url="postgresql://unused/never-used")
     integration.analyzer = analyzer
+    integration.tag_generator = _StubTagGenerator()
 
     written: list[dict] = []
 
