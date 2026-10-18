@@ -282,7 +282,7 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     tags = EXCLUDED.tags,
                     created_at = EXCLUDED.created_at,
                     model_card_url = EXCLUDED.model_card_url,
-                    inserted_at = EXCLUDED.inserted_at,
+                    -- inserted_at 记首次入库，不随更新改写（ISSUE-035）
                     price = COALESCE(EXCLUDED.price, models.price),
                     is_open_source = EXCLUDED.is_open_source,
                     huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank),

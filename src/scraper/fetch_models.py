@@ -669,7 +669,10 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     downloads = EXCLUDED.downloads,
                     likes = EXCLUDED.likes,
                     model_card_url = EXCLUDED.model_card_url,
-                    inserted_at = EXCLUDED.inserted_at,
+                    -- inserted_at 是「首次入库时间」，不随更新改写（ISSUE-035）：
+                    -- 之前每次 upsert 都用 EXCLUDED 覆盖它，导致这一列其实是「最后写入时间」，
+                    -- 用它统计新增/最近活动会把更新误当新增（2026-10-18 首轮抓取实测：
+                    -- 实际新增 1411 行，按 inserted_at 数出来 1976 行）。
                     is_open_source = EXCLUDED.is_open_source,
                     price = COALESCE(EXCLUDED.price, models.price),
                     huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank),
@@ -711,7 +714,8 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     """
                     INSERT INTO model_tags (model_id, tag, inserted_at)
                     VALUES (%s, %s, %s)
-                    ON CONFLICT (model_id, tag) DO UPDATE SET inserted_at = EXCLUDED.inserted_at
+                    -- 标签是「当前快照」：上面先 DELETE 再插入，所以这里的 inserted_at
+                    -- 记的是最近一次打标时间（ISSUE-035 只约束 models.inserted_at）
                     """,
                     tag_rows,
                 )
