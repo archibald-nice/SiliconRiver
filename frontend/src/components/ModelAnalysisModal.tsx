@@ -7,9 +7,11 @@ interface ModelAnalysisModalProps {
   isOpen: boolean;
   onClose: () => void;
   modelId: string;
+  /** 模型的发布时间（models.created_at，UTC ISO 串）；取不到就不显示这一行。 */
+  modelCreatedAt?: string | null;
 }
 
-const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProps) => {
+const ModelAnalysisModal = ({ isOpen, onClose, modelId, modelCreatedAt }: ModelAnalysisModalProps) => {
   const [avatarError, setAvatarError] = useState(false);
   const { data: analysis, isLoading, error } = useQuery({
     queryKey: ["model-analysis", modelId],
@@ -301,6 +303,11 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProp
                             <p>
                               使用 LLM: <span className="text-text-secondary font-medium">{analysis.llm_model_used || "Unknown"}</span>
                             </p>
+                            {modelCreatedAt && (
+                              <p>
+                                发布时间: <span className="text-text-secondary font-medium">{new Date(modelCreatedAt).toLocaleDateString("zh-CN")}</span>
+                              </p>
+                            )}
                             {analysis.analyzed_at && (
                               <p>
                                 分析时间: <span className="text-text-secondary font-medium">{new Date(analysis.analyzed_at).toLocaleDateString("zh-CN")}</span>

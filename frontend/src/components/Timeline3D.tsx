@@ -998,6 +998,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           modelId={selectedModelId}
+          modelCreatedAt={models.find((m) => m.model_id === selectedModelId)?.created_at ?? null}
         />
       )}
     </>
