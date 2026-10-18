@@ -18,7 +18,7 @@ _English version available at [README.md](README.md)._
 
 - **过滤优先的用户体验** – 时间范围（30天/6月/1年/全部）、年份、提供商、文本搜索和开源筛选，即时显示结果和模型数量。
 
-- **数据管道** – Python 抓取脚本、同步日志、PostgreSQL 存储、增量任务，以及 456 条后端测试用例（见[测试](#测试)）。
+- **数据管道** – Python 抓取脚本、同步日志、PostgreSQL 存储、增量任务，以及 461 条后端测试用例（见[测试](#测试)）。
 
 - **可观测性** – 进程内延迟/成功率指标，支持文本和 JSON 报告；提供商头像二进制缓存在 PostgreSQL。没有分布式缓存，也不做多实例指标聚合。
 
@@ -204,7 +204,7 @@ export TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/silicon_river_tes
 .venv/bin/python -m pytest tests/ -q
 ```
 
-后端测试共收集 **456 条用例，跑完约 22 秒**（`456 passed`）。
+后端测试共收集 **461 条用例，跑完约 22 秒**（`461 passed`）。
 
 两件值得记住的历史：
 
@@ -230,7 +230,7 @@ frontend/             React + Vite 单页应用（Timeline3D、筛选）
 scripts/              数据库初始化与维护 CLI
 src/scraper/          Hugging Face 和 OpenRouter 抓取程序
 src/analysis/         AI 增强分析（Brave Search、排行榜、里程碑检测）
-tests/                Pytest 测试套件（456 条后端用例）
+tests/                Pytest 测试套件（461 条后端用例）
 .github/workflows/    CI（后端 pytest + 前端构建）
 .env.example          环境变量模板
 requirements.txt      运行时 Python 依赖

@@ -225,6 +225,23 @@ def provider_key_for(raw: dict) -> str:
     return extract_provider(name, model_id or None)
 
 
+def infer_is_open_source(raw: dict) -> bool:
+    """判断 OpenRouter 上这条记录是不是开放权重模型（ISSUE-036）。
+
+    依据是 OpenRouter 自己返回的 ``hugging_face_id``：它指向该模型在 Hugging Face
+    上的仓库，有值就说明权重可下载（开放权重）。实测 471 条里 180 条带该字段，
+    包括 ``deepseek/deepseek-v4.1-flash-1017`` → ``deepseek-ai/DeepSeek-V4.1-Flash-1017``。
+
+    历史实现只把 id 里带 ``:free`` 的当作开源、其余**一律**判成闭源，于是
+    DeepSeek / Llama 这类开放权重模型的 OpenRouter 行会被打上「闭源」标签
+    （同一模型在 HF 行上是「开源」，页面上就成了自相矛盾的两张卡）。
+    ``:free`` 是**计费**属性，不是权重属性，不能当开源证据（16 个 :free 里 15 个
+    另有 hf_id，剩下那个也就不必靠猜）。
+    """
+    hf_id = raw.get("hugging_face_id")
+    return bool(isinstance(hf_id, str) and hf_id.strip())
+
+
 def to_record(raw: dict) -> ModelRecord:
     model_id = raw.get("id") or ""
     name = raw.get("name") or model_id
@@ -238,10 +255,7 @@ def to_record(raw: dict) -> ModelRecord:
     model_card_url = f"https://openrouter.ai/models/{encoded_id}"
     pricing = raw.get("pricing")
     price_payload: Optional[Dict[str, object]] = pricing if isinstance(pricing, dict) and pricing else None
-    if model_id and ":free" in model_id.lower():
-        is_open_source = True
-    else:
-        is_open_source = False
+    is_open_source = infer_is_open_source(raw)
     return ModelRecord(
         model_id=model_id or encoded_id,
         provider=provider or "unknown",
