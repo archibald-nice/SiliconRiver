@@ -171,6 +171,16 @@ async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此�
 
 `processed` 正常而 `inserted = 0` = 本轮没有新模型，抓取链路是健康的。
 
+### 4.7 HF 的 `filter=` 是标签过滤，`pipeline_tag=` 才是任务过滤
+
+- 现象：按 `filter="text-generation"` 抓 HF，embedding / 图像仓库照样进来
+  （`Qwen3-Embedding-8B` 的 `pipeline_tag` 是 `feature-extraction`，却也带着
+  `text-generation` 标签——作者打的标签，跟任务分类不是一回事）。
+- 铁律：筛任务用 `list_models(pipeline_tag=...)`；`filter=` 只用来筛 tag。
+  改完要抽查新增行：`pipeline_tag` 不是目标任务的应当删掉并记档。
+- 同一类陷阱：`ON CONFLICT DO UPDATE` 里别覆盖 `created_at`/`inserted_at` 这类时间列
+  （ISSUE-035：一次日常抓取把「首次入库时间」全改成了当天，1411 个新增被数成 1976）。
+
 ---
 
 ## 5. 未修问题的位置（不要在这里维护清单）
