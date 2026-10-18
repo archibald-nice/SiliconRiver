@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery, type QueryObserverResult } from "@tanstack/react-query";
 
 import {
   buildProviderAvatarUrl,
   fetchStats,
   fetchTimeline,
   type ProviderStat,
+  type TimelineModel,
   type TimelineResponse,
 } from "../api/client";
 import Timeline3D from "../components/Timeline3D";
@@ -17,11 +18,55 @@ import { ModeSwitcher, type TimelineModeName } from "../components/ModeSwitcher"
 const TIMELINE_PAGE_SIZE = 200;
 const prefetchedAvatars = new Set<string>();
 
+type TimelinePageResult = QueryObserverResult<TimelineResponse, Error>;
+
+type TimelinePagesState = {
+  items: TimelineModel[];
+  total: number;
+  pageSize: number;
+  lastPageItemCount: number;
+  isFirstPageLoading: boolean;
+  isLoadingMore: boolean;
+};
+
+// 把已请求的各页 timeline 合并成一份列表（第 1 页在前，其后是「加载更多」追加的页）。
+// 用 useQueries 的 combine 而不是 useMemo：combine 的返回值会经过 react-query 的
+// replaceEqualDeep，内容没变时沿用上一次的对象/数组引用，
+// 避免 Timeline3D 只因为拿到新数组就把整个 Three.js 场景重建一遍。
+const mergeTimelinePages = (results: TimelinePageResult[]): TimelinePagesState => {
+  const items: TimelineModel[] = [];
+  const seenModelIds = new Set<string>();
+  let lastPageItemCount = 0;
+
+  results.forEach((result) => {
+    const pageItems = result.data?.items ?? [];
+    lastPageItemCount = pageItems.length;
+    pageItems.forEach((item) => {
+      // 跨页去重：翻页间隙有新模型落库时，同一条可能同时出现在相邻两页
+      if (seenModelIds.has(item.model_id)) {
+        return;
+      }
+      seenModelIds.add(item.model_id);
+      items.push(item);
+    });
+  });
+
+  const firstPage = results[0];
+  return {
+    items,
+    total: firstPage?.data?.total ?? 0,
+    pageSize: firstPage?.data?.page_size ?? TIMELINE_PAGE_SIZE,
+    lastPageItemCount,
+    isFirstPageLoading: firstPage ? firstPage.isLoading : true,
+    isLoadingMore: results.some((result, index) => index > 0 && result.isLoading),
+  };
+};
+
 const HomeWithAnalysis = () => {
   // Timeline 状态
   const [timelineRange, setTimelineRange] = useState<TimelinePresetRange>("30d");
   const [timelineYear, setTimelineYear] = useState<number | null>(null);
-  const [timelinePage, setTimelinePage] = useState(1);
+  const [timelineLoadedPages, setTimelineLoadedPages] = useState(1);
   const [timelineProvider, setTimelineProvider] = useState<string | null>(null);
   const [timelineSearchInput, setTimelineSearchInput] = useState("");
   const [timelineSearchFilter, setTimelineSearchFilter] = useState("");
@@ -37,40 +82,73 @@ const HomeWithAnalysis = () => {
 
   const providerOptions = useMemo(() => providerStats?.map((item) => item.provider) ?? [], [providerStats]);
 
-  // Timeline 数据
-  const { data: timelineData, isLoading: isTimelineLoading } = useQuery<TimelineResponse>({
-    queryKey: [
-      "timeline",
+  // Timeline 数据：按「已加载页数」逐页请求，每页独立缓存，追加新页时不会重取旧页。
+  // sort 用 "desc"：最新发布的模型落在第 1 页，首屏即可见；
+  // 「加载更多」再往更早的页追加（接口没有 offset/limit，等价参数是 page/page_size）。
+  // 用 useMemo 缓存查询配置，避免搜索框逐字输入时把每页的 options 重建一遍。
+  const timelineQueries = useMemo(
+    () =>
+      Array.from({ length: timelineLoadedPages }, (_, index) => {
+        const pageNumber = index + 1;
+        return {
+          queryKey: [
+            "timeline",
+            timelineRange,
+            timelineYear,
+            pageNumber,
+            timelineProvider,
+            timelineSearchFilter,
+            timelineOpenSource,
+          ],
+          queryFn: () =>
+            fetchTimeline({
+              preset: timelineRange,
+              year: timelineYear,
+              page: pageNumber,
+              page_size: TIMELINE_PAGE_SIZE,
+              sort: "desc",
+              provider: timelineProvider,
+              model_name: timelineSearchFilter || undefined,
+              open_source:
+                timelineOpenSource === "all" ? null : timelineOpenSource === "open" ? true : false,
+            }),
+        };
+      }),
+    [
+      timelineLoadedPages,
       timelineRange,
       timelineYear,
-      timelinePage,
       timelineProvider,
       timelineSearchFilter,
       timelineOpenSource,
-    ],
-    queryFn: () =>
-      fetchTimeline({
-        preset: timelineRange,
-        year: timelineYear,
-        page: timelinePage,
-        page_size: TIMELINE_PAGE_SIZE,
-        sort: "asc",
-        provider: timelineProvider,
-        model_name: timelineSearchFilter || undefined,
-        open_source:
-          timelineOpenSource === "all" ? null : timelineOpenSource === "open" ? true : false,
-      }),
+    ]
+  );
+
+  const timelinePages = useQueries({
+    queries: timelineQueries,
+    combine: mergeTimelinePages,
   });
 
-  const timelineItems = timelineData?.items ?? [];
-  const timelineTotal = timelineData?.total ?? 0;
-  const timelineTotalPages = timelineData ? Math.max(1, Math.ceil(timelineData.total / timelineData.page_size)) : 1;
+  const {
+    items: timelineItems,
+    total: timelineTotal,
+    pageSize: timelinePageSize,
+    lastPageItemCount,
+    isFirstPageLoading,
+    isLoadingMore: isTimelineLoadingMore,
+  } = timelinePages;
+
+  const isTimelineLoading = isFirstPageLoading;
+  // 还有更早的模型：总数没加载完，且最后一页是装满的（没装满说明已经到末页，
+  // 这样既不会越界请求空页，也能容忍跨页去重导致的条数略少）
+  const canLoadMoreTimeline = timelineTotal > timelineItems.length && lastPageItemCount >= timelinePageSize;
+  const timelineRemaining = Math.max(0, timelineTotal - timelineItems.length);
 
   useEffect(() => {
-    if (!timelineData) {
+    if (timelineItems.length === 0) {
       return;
     }
-    timelineData.items.forEach((item) => {
+    timelineItems.forEach((item) => {
       if (!item.avatar_url) {
         return;
       }
@@ -84,22 +162,12 @@ const HomeWithAnalysis = () => {
       img.decoding = "async";
       img.src = buildProviderAvatarUrl(provider);
     });
-  }, [timelineData]);
+  }, [timelineItems]);
 
-  const onTimelinePageChange = useCallback(
-    (direction: "prev" | "next") => {
-      setTimelinePage((current) => {
-        const target = direction === "next" ? current + 1 : current - 1;
-        const clamped = Math.min(Math.max(target, 1), timelineTotalPages);
-        return clamped;
-      });
-    },
-    [timelineTotalPages]
-  );
-
-  const currentTimelinePage = timelineData?.page ?? timelinePage;
-  const canGoPrevTimeline = currentTimelinePage > 1;
-  const canGoNextTimeline = currentTimelinePage < timelineTotalPages;
+  // 「加载更多」：sort="desc" 下页码越大离今天越远，追加下一页即把更早的模型接进画布
+  const handleLoadMoreTimeline = useCallback(() => {
+    setTimelineLoadedPages((current) => current + 1);
+  }, []);
 
   return (
     <div className="flex w-full min-h-0 flex-1 gap-6 xl:gap-10 relative">
@@ -116,14 +184,14 @@ const HomeWithAnalysis = () => {
         selectedProvider={timelineProvider}
         onProviderChange={(value: string | null) => {
           setTimelineProvider(value);
-          setTimelinePage(1);
+          setTimelineLoadedPages(1);
         }}
         modelQuery={timelineSearchInput}
         onModelQueryChange={setTimelineSearchInput}
         onModelQuerySubmit={() => {
           const trimmed = timelineSearchInput.trim();
           setTimelineSearchFilter(trimmed);
-          setTimelinePage(1);
+          setTimelineLoadedPages(1);
           if (trimmed.length > 0) {
             setTimelineRange("all");
             setTimelineYear(null);
@@ -132,7 +200,7 @@ const HomeWithAnalysis = () => {
         onModelQueryClear={() => {
           setTimelineSearchFilter("");
           setTimelineSearchInput("");
-          setTimelinePage(1);
+          setTimelineLoadedPages(1);
           if (timelineRange === "all") {
             setTimelineRange("30d");
             setTimelineYear(null);
@@ -141,7 +209,7 @@ const HomeWithAnalysis = () => {
         onPresetChange={(range: TimelinePresetRange) => {
           setTimelineRange(range);
           setTimelineYear(null);
-          setTimelinePage(1);
+          setTimelineLoadedPages(1);
         }}
         onCustomYearChange={(year: number | null) => {
           setTimelineYear(year);
@@ -150,12 +218,12 @@ const HomeWithAnalysis = () => {
           } else {
             setTimelineRange("30d");
           }
-          setTimelinePage(1);
+          setTimelineLoadedPages(1);
         }}
         openSourceFilter={timelineOpenSource}
         onOpenSourceChange={(value: "all" | "open" | "closed") => {
           setTimelineOpenSource(value);
-          setTimelinePage(1);
+          setTimelineLoadedPages(1);
         }}
       />
 
@@ -170,11 +238,34 @@ const HomeWithAnalysis = () => {
                   滚动或调整右侧筛选器，浏览最新模型节点。
                 </p>
               </div>
-              <ModeSwitcher
-                currentMode={timelineMode}
-                onModeChange={setTimelineMode}
-                disabled={isTimelineLoading || timelineItems.length === 0}
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                {/* 分页入口：结果被截断时把更早的页追加进画布。
+                    常驻挂载（只是禁用/换文案），避免出现/消失时画布尺寸变化导致 Three.js 渲染尺寸错位。 */}
+                {timelineTotal > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleLoadMoreTimeline}
+                    disabled={!canLoadMoreTimeline || isTimelineLoadingMore}
+                    title={
+                      canLoadMoreTimeline
+                        ? `还有 ${timelineRemaining.toLocaleString()} 个更早发布的模型，点此追加到画布`
+                        : "全部模型已加载"
+                    }
+                    className="rounded-md border border-border-default px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60 touch-manipulation"
+                  >
+                    {isTimelineLoadingMore
+                      ? "加载中…"
+                      : canLoadMoreTimeline
+                        ? `加载更多（剩余 ${timelineRemaining.toLocaleString()} 个）`
+                        : `已加载全部 ${timelineTotal.toLocaleString()} 个`}
+                  </button>
+                )}
+                <ModeSwitcher
+                  currentMode={timelineMode}
+                  onModeChange={setTimelineMode}
+                  disabled={isTimelineLoading || timelineItems.length === 0}
+                />
+              </div>
             </div>
           </header>
 
@@ -209,14 +300,14 @@ const HomeWithAnalysis = () => {
               selectedProvider={timelineProvider}
               onProviderChange={(value) => {
                 setTimelineProvider(value);
-                setTimelinePage(1);
+                setTimelineLoadedPages(1);
               }}
               modelQuery={timelineSearchInput}
               onModelQueryChange={setTimelineSearchInput}
               onModelQuerySubmit={() => {
                 const trimmed = timelineSearchInput.trim();
                 setTimelineSearchFilter(trimmed);
-                setTimelinePage(1);
+                setTimelineLoadedPages(1);
                 if (trimmed.length > 0) {
                   setTimelineRange("all");
                   setTimelineYear(null);
@@ -225,7 +316,7 @@ const HomeWithAnalysis = () => {
               onModelQueryClear={() => {
                 setTimelineSearchFilter("");
                 setTimelineSearchInput("");
-                setTimelinePage(1);
+                setTimelineLoadedPages(1);
                 if (timelineRange === "all") {
                   setTimelineRange("30d");
                   setTimelineYear(null);
@@ -234,7 +325,7 @@ const HomeWithAnalysis = () => {
               onPresetChange={(range) => {
                 setTimelineRange(range);
                 setTimelineYear(null);
-                setTimelinePage(1);
+                setTimelineLoadedPages(1);
               }}
               onCustomYearChange={(year) => {
                 setTimelineYear(year);
@@ -243,15 +334,15 @@ const HomeWithAnalysis = () => {
                 } else {
                   setTimelineRange("30d");
                 }
-                setTimelinePage(1);
+                setTimelineLoadedPages(1);
               }}
               openSourceFilter={timelineOpenSource}
               onOpenSourceChange={(value) => {
                 setTimelineOpenSource(value);
-                setTimelinePage(1);
+                setTimelineLoadedPages(1);
               }}
             />
-            {timelineData && (
+            {timelineTotal > 0 && (
               <div className="mt-2 border-t border-border-default pt-2 text-xs text-text-muted">
                 <p>
                   {`💠 总计：`}
@@ -259,6 +350,13 @@ const HomeWithAnalysis = () => {
                     {timelineTotal.toLocaleString()}
                   </span>
                   {` 个模型节点`}
+                </p>
+                <p className="mt-1">
+                  {`已显示：`}
+                  <span className="font-semibold text-text-primary">
+                    {timelineItems.length.toLocaleString()}
+                  </span>
+                  {timelineRemaining > 0 ? ` 个（最新的一批）` : ` 个（全部已加载）`}
                 </p>
               </div>
             )}

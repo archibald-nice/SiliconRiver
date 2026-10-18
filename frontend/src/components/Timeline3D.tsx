@@ -216,16 +216,11 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     nearestButton.style.zIndex = "20";
     container.appendChild(nearestButton);
 
-    // Fathest 快捷按钮
-    const fathestButton = document.createElement("button");
-    fathestButton.className =
-      "absolute right-3 z-20 rounded-md border border-amber-700 bg-amber-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-amber-800";
-    fathestButton.textContent = "Fathest";
-    fathestButton.style.position = "absolute";
-    fathestButton.style.right = "12px";
-    fathestButton.style.top = "52px";
-    fathestButton.style.zIndex = "20";
-    container.appendChild(fathestButton);
+    // ISSUE-009：「Fathest」（最著名节点）快捷按钮已移除。
+    // 它原本用 model.huggingface_rank 找排名最靠前的节点，但该字段在数据管线里恒为 NULL
+    //（抓取脚本写死 None），/api/timeline 出参也不含 downloads / likes，
+    // 于是 findFathestNode 只能返回下标 0，点了永远跳到第一个节点。
+    // 等接口真正返回热度指标（downloads / likes）再恢复这个按钮。
 
     // SVG 引导线
     const leaderSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -287,7 +282,6 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
       .then(() => {
         // 检查是否已取消（组件已卸载或models/mode已变化）
         if (cancelled) {
-          console.log("Timeline initialization cancelled (effect cleaned up)");
           modeInstance.dispose();
           return;
         }
@@ -731,31 +725,6 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
         };
         nearestButton.addEventListener("click", handleNearest);
 
-        // Fathest 按钮点击事件处理 - 根据排名查找最著名的节点
-        const findFathestNode = (): number => {
-          let bestIndex = 0;
-          let bestRank = Infinity;
-
-          sorted.forEach((model, index) => {
-            const rank = model.huggingface_rank || Infinity;
-            if (rank < bestRank && rank > 0) {
-              bestRank = rank;
-              bestIndex = index;
-            }
-          });
-
-          return bestIndex;
-        };
-
-        const handleFathest = () => {
-          const fathestIndex = findFathestNode();
-          if (fathestIndex >= 0) {
-            lastFocusDirection = fathestIndex > currentFocusIndex ? 1 : -1;
-            modeInstance.setFocus(fathestIndex);
-          }
-        };
-        fathestButton.addEventListener("click", handleFathest);
-
         const handleResize = () => {
           const newWidth = container.clientWidth;
           const safeNewWidth = Number.isFinite(newWidth) ? newWidth : 0;
@@ -783,13 +752,6 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
             // 获取节点的世界坐标位置
             activeMarker.mesh.getWorldPosition(focusPosition);
             const projected = focusPosition.clone().project(camera);
-
-            // 调试日志（偶尔打印避免刷屏）
-            if (Math.random() < 0.01) {
-              const screenX_debug = (projected.x * 0.5 + 0.5) * viewportWidth;
-              const screenY_debug = (-projected.y * 0.5 + 0.5) * viewportHeight;
-              console.log(`[Bubble] Viewport: ${viewportWidth}x${viewportHeight}, World: (${focusPosition.x.toFixed(2)}, ${focusPosition.y.toFixed(2)}, ${focusPosition.z.toFixed(2)}), Projected NDC: (${projected.x.toFixed(3)}, ${projected.y.toFixed(3)}, ${projected.z.toFixed(3)}), Screen: (${screenX_debug.toFixed(0)}, ${screenY_debug.toFixed(0)})`);
-            }
 
             if (projected.z < -1 || projected.z > 1) {
               focusPrimaryBubble.style.visibility = "hidden";
@@ -937,7 +899,6 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           renderer.domElement.removeEventListener("pointerup", handlePointerUp);
           renderer.domElement.removeEventListener("wheel", handleWheel);
           nearestButton.removeEventListener("click", handleNearest);
-          fathestButton.removeEventListener("click", handleFathest);
 
           tooltip.remove();
           focusPrimaryBubble.remove();
@@ -947,7 +908,6 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           prevHintLabel.remove();
           priceTooltip.remove();
           nearestButton.remove();
-          fathestButton.remove();
           leaderSvg.remove();
 
           markerGeometry.dispose();
@@ -986,7 +946,6 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           // 主题已变化，更新状态以触发主要 useEffect 重新执行
           const newTheme = (document.documentElement.dataset.theme as 'light' | 'dark') || 'dark';
           setTheme(newTheme);
-          console.log(`[Theme Change] 主题已切换至: ${newTheme}`);
           break;
         }
       }

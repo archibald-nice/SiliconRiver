@@ -168,8 +168,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
   private createHelixPath(): void {
     if (!this.timelineGroup) return;
 
-    console.log(`[createHelixPath] Creating helix with TOTAL_HEIGHT=${this.TOTAL_HEIGHT}, TOTAL_TURNS=${this.TOTAL_TURNS}, HELIX_RADIUS=${this.HELIX_RADIUS}`);
-
     const points: InstanceType<typeof THREE.Vector3>[] = [];
     const segments = 500;
 
@@ -181,8 +179,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
       const z = Math.sin(angle) * this.HELIX_RADIUS;
       points.push(new THREE.Vector3(x, height, z));
     }
-
-    console.log(`[createHelixPath] Created ${points.length} points. First: (${points[0].x.toFixed(2)}, ${points[0].y.toFixed(2)}, ${points[0].z.toFixed(2)}), Last: (${points[points.length-1].x.toFixed(2)}, ${points[points.length-1].y.toFixed(2)}, ${points[points.length-1].z.toFixed(2)})`);
 
     this.helixGeometry = new THREE.BufferGeometry().setFromPoints(points);
     this.helixMaterial = new THREE.LineBasicMaterial({
@@ -278,11 +274,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
     const height = t * this.TOTAL_HEIGHT;
     const x = Math.cos(angle) * this.HELIX_RADIUS;
     const z = Math.sin(angle) * this.HELIX_RADIUS;
-
-    // 调试日志
-    if (t === 0 || t === 1) {
-      console.log(`[timeToHelixPosition] t=${t}, TOTAL_HEIGHT=${this.TOTAL_HEIGHT}, TOTAL_TURNS=${this.TOTAL_TURNS}, height=${height}, angle=${angle}`);
-    }
 
     return new THREE.Vector3(x, height, z);
   }
@@ -409,10 +400,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
    * @returns 该年份后的第一个模型索引
    */
   private handleYearAnchorClick(mesh: any): number | null {
-    const year = mesh.userData.year as number;
     const yearTimestamp = mesh.userData.timestamp as number;
-
-    console.log(`[YearAnchor] Clicked on year ${year} anchor`);
 
     // 查找该年份后的第一个模型节点
     const firstModelIndex = this.nodes.findIndex((node) => {
@@ -421,12 +409,10 @@ export class HelixConstellationMode extends BaseTimelineMode {
     });
 
     if (firstModelIndex >= 0) {
-      console.log(`[YearAnchor] Jumping to first model of ${year} at index ${firstModelIndex}`);
       return firstModelIndex;
     }
 
     // 如果该年份之后没有模型，返回 null
-    console.log(`[YearAnchor] No models found after ${year}, staying at current position`);
     return null;
   }
 
@@ -434,11 +420,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
    * 处理季度锚点点击
    */
   private handleQuarterAnchorClick(mesh: any): number | null {
-    const year = mesh.userData.year as number;
-    const quarter = mesh.userData.quarter as number;
     const quarterTimestamp = mesh.userData.timestamp as number;
-
-    console.log(`[QuarterAnchor] Clicked on Q${quarter} ${year} anchor`);
 
     // 查找该季度后的第一个模型节点
     const firstModelIndex = this.nodes.findIndex((node) => {
@@ -447,11 +429,9 @@ export class HelixConstellationMode extends BaseTimelineMode {
     });
 
     if (firstModelIndex >= 0) {
-      console.log(`[QuarterAnchor] Jumping to first model of Q${quarter} ${year} at index ${firstModelIndex}`);
       return firstModelIndex;
     }
 
-    console.log(`[QuarterAnchor] No models found after Q${quarter} ${year}`);
     return null;
   }
 
@@ -459,11 +439,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
    * 处理月份锚点点击
    */
   private handleMonthAnchorClick(mesh: any): number | null {
-    const year = mesh.userData.year as number;
-    const month = mesh.userData.month as number;
     const monthTimestamp = mesh.userData.timestamp as number;
-
-    console.log(`[MonthAnchor] Clicked on ${year}-${String(month).padStart(2, '0')} anchor`);
 
     // 查找该月份后的第一个模型节点
     const firstModelIndex = this.nodes.findIndex((node) => {
@@ -472,11 +448,9 @@ export class HelixConstellationMode extends BaseTimelineMode {
     });
 
     if (firstModelIndex >= 0) {
-      console.log(`[MonthAnchor] Jumping to first model of ${year}-${String(month).padStart(2, '0')} at index ${firstModelIndex}`);
       return firstModelIndex;
     }
 
-    console.log(`[MonthAnchor] No models found after ${year}-${String(month).padStart(2, '0')}`);
     return null;
   }
 
@@ -490,8 +464,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
     const sorted = this.dataset.models;
     const minTime = this.dataset.minTime;
     const span = this.dataset.span;
-
-    console.log(`[HelixMode] Layout ${sorted.length} models, minTime: ${minTime}, span: ${span}`);
 
     // 存储已放置节点的位置用于碰撞检测
     const placedPositions: InstanceType<typeof THREE.Vector3>[] = [];
@@ -527,10 +499,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
       // 记录此位置
       placedPositions.push(nodePosition.clone());
 
-      if (index < 5 || index >= sorted.length - 5) {
-        console.log(`[HelixMode] Model ${index}: t=${t.toFixed(4)}, pos=(${nodePosition.x.toFixed(2)}, ${nodePosition.y.toFixed(2)}, ${nodePosition.z.toFixed(2)}), date=${model.created_at}`);
-      }
-
       // 在传入的 nodes 数组中查找匹配的节点
       const node = nodes.find((n) => n.model.model_id === model.model_id);
 
@@ -542,8 +510,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
         node.setMarkerIndex(this.nodes.length - 1);
       }
     });
-
-    console.log(`[HelixMode] Total nodes laid out: ${this.nodes.length}`);
 
     // 创建年份、季度、月份锚点
     this.createYearAnchors();
@@ -572,8 +538,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
     const endDate = new Date(maxTime);
     const startYear = startDate.getUTCFullYear();
     const endYear = endDate.getUTCFullYear();
-
-    console.log(`[YearAnchors] Timeline range: ${startYear}-${endYear}`);
 
     // 清空旧锚点
     this.yearAnchors.forEach(anchor => {
@@ -635,11 +599,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
         position: position.clone(),
         mesh: anchorMesh,
       });
-
-      console.log(`[YearAnchors] Created anchor for ${year} at t=${t.toFixed(4)}, pos=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
     }
-
-    console.log(`[YearAnchors] Total anchors created: ${this.yearAnchors.length}`);
   }
 
   /**
@@ -656,8 +616,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
     const endDate = new Date(maxTime);
     const startYear = startDate.getUTCFullYear();
     const endYear = endDate.getUTCFullYear();
-
-    console.log(`[QuarterAnchors] Timeline range: ${startYear}-${endYear}`);
 
     // 清空旧锚点
     this.quarterAnchors.forEach(anchor => {
@@ -717,12 +675,8 @@ export class HelixConstellationMode extends BaseTimelineMode {
           position: position.clone(),
           mesh: anchorMesh,
         });
-
-        console.log(`[QuarterAnchors] Created anchor for Q${quarter} ${year} at t=${t.toFixed(4)}`);
       }
     }
-
-    console.log(`[QuarterAnchors] Total anchors created: ${this.quarterAnchors.length}`);
   }
 
   /**
@@ -739,8 +693,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
     const endDate = new Date(maxTime);
     const startYear = startDate.getUTCFullYear();
     const endYear = endDate.getUTCFullYear();
-
-    console.log(`[MonthAnchors] Timeline range: ${startYear}-${endYear}`);
 
     // 清空旧锚点
     this.monthAnchors.forEach(anchor => {
@@ -801,8 +753,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
         });
       }
     }
-
-    console.log(`[MonthAnchors] Total anchors created: ${this.monthAnchors.length}`);
   }
 
   private applyFocus(): void {
@@ -814,12 +764,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
 
     const focusedNode = this.nodes[this.currentFocusIndex];
     const focusPosition = focusedNode.basePosition.clone();
-
-    // 验证：获取mesh的实际世界位置
-    const meshWorldPos = new THREE.Vector3();
-    focusedNode.mesh.getWorldPosition(meshWorldPos);
-
-    console.log(`[applyFocus] Focus index: ${this.currentFocusIndex}, basePos: (${focusPosition.x.toFixed(2)}, ${focusPosition.y.toFixed(2)}, ${focusPosition.z.toFixed(2)}), meshPos: (${focusedNode.mesh.position.x.toFixed(2)}, ${focusedNode.mesh.position.y.toFixed(2)}, ${focusedNode.mesh.position.z.toFixed(2)}), meshWorldPos: (${meshWorldPos.x.toFixed(2)}, ${meshWorldPos.y.toFixed(2)}, ${meshWorldPos.z.toFixed(2)}), cameraTarget: (${this.targetCameraPosition.x.toFixed(2)}, ${this.targetCameraPosition.y.toFixed(2)}, ${this.targetCameraPosition.z.toFixed(2)})`);
 
     // 计算相机位置：在焦点节点周围水平环绕，并在上方偏移
     const offsetX = Math.cos(this.cameraAngle) * this.cameraDistance;
@@ -833,8 +777,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
 
     // 相机看向焦点节点
     this.targetLookAt.copy(focusPosition);
-
-    console.log(`[applyFocus] Focus index: ${this.currentFocusIndex}, focusPos: (${focusPosition.x.toFixed(2)}, ${focusPosition.y.toFixed(2)}, ${focusPosition.z.toFixed(2)}), cameraTarget: (${this.targetCameraPosition.x.toFixed(2)}, ${this.targetCameraPosition.y.toFixed(2)}, ${this.targetCameraPosition.z.toFixed(2)})`);
 
     // 更新发光精灵位置
     if (this.glowSprite) {
@@ -1104,11 +1046,6 @@ export class HelixConstellationMode extends BaseTimelineMode {
     this.camera.position.copy(this.cameraPosition);
     this.camera.lookAt(this.cameraLookAt);
     this.camera.updateMatrixWorld(); // 强制更新世界矩阵
-
-    // 调试：偶尔打印相机状态
-    if (Math.random() < 0.01) {
-      console.log(`[HelixMode Camera] Position: (${this.camera.position.x.toFixed(2)}, ${this.camera.position.y.toFixed(2)}, ${this.camera.position.z.toFixed(2)}), LookAt: (${this.cameraLookAt.x.toFixed(2)}, ${this.cameraLookAt.y.toFixed(2)}, ${this.cameraLookAt.z.toFixed(2)})`);
-    }
 
     // 粒子轻微旋转
     if (this.particleSystem) {
