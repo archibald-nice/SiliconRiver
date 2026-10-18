@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS models (
 	is_open_source bool NULL,
 	price jsonb NULL,
 	huggingface_rank int4 NULL,
+	-- 数据来源（ISSUE-004）：值域 'huggingface' | 'openrouter' | 'unknown'。
+	-- 写入方：src/scraper/fetch_models.py → 'huggingface'；
+	--         src/scraper/fetch_models_openrouter.py → 'openrouter'。
+	-- 历史行在 scripts/migrate_add_model_source.py 回填之前一律是 'unknown'；
+	-- 手写 INSERT 省略该列时也落到 'unknown'（默认值就是为此留的，不要去掉）。
+	source text NOT NULL DEFAULT 'unknown',
 	CONSTRAINT models_model_id_key UNIQUE (model_id),
 	CONSTRAINT models_pkey PRIMARY KEY (id)
 );
