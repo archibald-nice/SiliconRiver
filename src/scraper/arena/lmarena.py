@@ -1,25 +1,33 @@
 """LMArena 官方排行榜抓取。
 
-数据源：Hugging Face 数据集 ``lmarena-ai/leaderboard-dataset`` 的
-``text/latest`` split。用 datasets-server 的 ``/rows`` 接口翻页读取，
-**不引入 pyarrow/pandas**（parquet 直链更快，但会把依赖装进来）。
+数据源：Hugging Face 数据集 ``lmarena-ai/leaderboard-dataset`` 的 ``text/latest`` split。
 
-实测（2026-10-18）：
+两条路，**优先 parquet**：
 
-* ``length`` 上限 **100**，传 500/1000 返回 422；
-* ``text/latest`` 共 11,033 行、29 个 category、``overall`` 416 个模型；
-* 9 个并发线程翻 111 页约 16 秒。
+1. ``huggingface_hub.hf_hub_download`` 直接下 ``text/latest-*.parquet``（613KB）+
+   pyarrow 读表。走 huggingface.co / CDN，不占 datasets-server 的配额。
+2. 回落 datasets-server 的 ``/rows`` 接口翻页（``length`` 上限 100，111 页）。
 
-失败策略：任何一页重试耗尽就抛 :class:`ArenaFetchError`，**不返回部分数据**。
+为什么改默认（2026-10-18 实测）：``/rows`` 的匿名配额极低，带上 HF token 也会在
+第一页就 **429**，退避重试烧完直接抛错——同步跑不起来。同一时刻 parquet 直链
+1.4 秒下完。
+
+实测（2026-10-18）：``text/latest`` 共 11,033 行、29 个 category、``overall`` 416 个模型；
+``/rows`` 传 500/1000 返回 422。
+
+失败策略：两条路都失败才抛 :class:`ArenaFetchError`，**不返回部分数据**。
 部分数据会让 category 内排名看起来“少了一些模型”，却没有任何信号。
 """
 from __future__ import annotations
 
+import fnmatch
 import logging
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -37,6 +45,9 @@ REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.5
 USER_AGENT = "SiliconRiver/1.0 (arena score sync)"
+# parquet 落盘缓存：默认放项目内 ``data/cache/hf``，避免依赖 ``~/.cache/huggingface``
+# 是否可写（沙箱/只读 HOME 环境里那里写不进去，hf_hub_download 会直接失败）。
+DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "hf"
 
 
 class ArenaFetchError(RuntimeError):
@@ -69,7 +80,14 @@ def _session() -> requests.Session:
     session = getattr(_thread_local, "session", None)
     if session is None:
         session = requests.Session()
-        session.headers.update({"User-Agent": USER_AGENT})
+        headers = {"User-Agent": USER_AGENT}
+        # 匿名调 datasets-server 的配额很低：实测本机不加 token 直接 429
+        # （/rows 打第一页就 429，脚本按 5s 起步退避重试，111 页翻不下来）；
+        # 带 HF token 同一请求 200 / 35KB。token 只读公开数据集，无额外权限。
+        token = (os.getenv("HF_TOKEN") or "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        session.headers.update(headers)
         _thread_local.session = session
     return session
 
@@ -158,6 +176,66 @@ def parse_rows_payload(payload: dict[str, Any]) -> list[ArenaRow]:
     return parsed
 
 
+def _latest_parquet_files(repo_id: str = DATASET) -> list[str]:
+    """列出数据集中 ``text/latest*.parquet`` 的文件路径（按名字排序，兼容分片）。"""
+    from huggingface_hub import HfApi
+
+    token = (os.getenv("HF_TOKEN") or "").strip() or None
+    files = HfApi(token=token).list_repo_files(repo_id, repo_type="dataset")
+    matched = sorted(
+        f for f in files if fnmatch.fnmatch(f, "text/latest*.parquet") and f.count("/") == 1
+    )
+    if not matched:
+        raise ArenaFetchError(f"{repo_id} 里找不到 text/latest*.parquet")
+    return matched
+
+
+def fetch_latest_parquet_files() -> list[dict[str, Any]]:
+    """下载并读出 ``text/latest`` 的全部行（原始 dict 列表，列名保持上游命名）。"""
+    from huggingface_hub import hf_hub_download
+    import pyarrow.parquet as pq
+
+    token = (os.getenv("HF_TOKEN") or "").strip() or None
+    cache_dir = Path(os.getenv("HF_HOME") or DEFAULT_CACHE_DIR)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    records: list[dict[str, Any]] = []
+    for filename in _latest_parquet_files():
+        path = hf_hub_download(
+            repo_id=DATASET,
+            filename=filename,
+            repo_type="dataset",
+            token=token,
+            cache_dir=str(cache_dir),
+        )
+        table = pq.read_table(path)
+        records.extend(table.to_pylist())
+    return records
+
+
+def parse_parquet_records(records: list[dict[str, Any]]) -> list[ArenaRow]:
+    """parquet 行 → :class:`ArenaRow`（与 :func:`parse_rows_payload` 同口径，纯函数）。"""
+    parsed: list[ArenaRow] = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        model_name = _as_text(row.get("model_name"))
+        category = _as_text(row.get("category"))
+        if not model_name or not category:
+            continue
+        parsed.append(
+            ArenaRow(
+                model_name=model_name,
+                organization=_as_text(row.get("organization")),
+                category=category,
+                rank=_as_int(row.get("rank")),
+                score=_as_float(row.get("rating")),
+                vote_count=_as_float(row.get("vote_count")),
+                publish_date=_as_text(row.get("leaderboard_publish_date")),
+            )
+        )
+    return parsed
+
+
 def fetch_page(
     offset: int,
     length: int = PAGE_SIZE,
@@ -220,6 +298,20 @@ def fetch_latest_rows(
         raise ValueError(f"limit 必须为正数或 None：{limit}")
     if not 1 <= page_size <= PAGE_SIZE:
         raise ValueError(f"page_size 必须在 1..{PAGE_SIZE} 之间：{page_size}")
+
+    # 首选 parquet：不占 datasets-server 配额（实测 /rows 带 token 也 429）
+    try:
+        records = fetch_latest_parquet_files()
+    except Exception as exc:  # noqa: BLE001 - 只要 parquet 这条路不通就回落翻页
+        LOGGER.warning(
+            "LMArena parquet 拉取失败，回落到 /rows 翻页（会慢很多）：%s", exc
+        )
+    else:
+        rows = parse_parquet_records(records)
+        if limit is not None:
+            rows = rows[:limit]
+        LOGGER.info("LMArena 拉取完成（parquet）：%d 行", len(rows))
+        return rows
 
     first_payload = fetch_page(
         0, page_size, timeout=timeout, max_retries=max_retries

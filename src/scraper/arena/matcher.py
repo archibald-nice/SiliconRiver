@@ -371,24 +371,35 @@ class _IndexedCandidate:
     forms: tuple[tuple[str, int], ...]
     tokens: frozenset[str]
     org_tokens: frozenset[str] = frozenset()
+    size: tuple[frozenset[str], frozenset[str], frozenset[str]] = (
+        frozenset(),
+        frozenset(),
+        frozenset(),
+    )
 
 
 class _CandidateIndex:
     def __init__(self, model_ids: Iterable[str]):
         self.model_ids: tuple[str, ...] = tuple(dict.fromkeys(model_ids))
         self._by_form: dict[str, list[tuple[_IndexedCandidate, int]]] = {}
+        # 模糊层按尺寸签名分桶：同尺寸才可能匹配，否则 1 万行 × 1700 候选逐一
+        # 比 token 子集要跑几分钟（2026-10-18 实测同步卡在这一步）。
+        self._by_size: dict[tuple, list[_IndexedCandidate]] = {}
         self._candidates: list[_IndexedCandidate] = []
         for model_id in self.model_ids:
             forms = tuple(scored_forms(model_id))
             if not forms:
                 continue
+            signature = size_signature(model_id)
             candidate = _IndexedCandidate(
                 model_id=model_id,
                 forms=forms,
                 tokens=_tokens(model_id),
                 org_tokens=_org_tokens(model_id),
+                size=(signature.mixture, signature.total, signature.active),
             )
             self._candidates.append(candidate)
+            self._by_size.setdefault(candidate.size, []).append(candidate)
             for form, stage in forms:
                 self._by_form.setdefault(form, []).append((candidate, stage))
 
@@ -398,6 +409,13 @@ class _CandidateIndex:
     @property
     def candidates(self) -> tuple[_IndexedCandidate, ...]:
         return tuple(self._candidates)
+
+    def same_size(self, name: str) -> list[_IndexedCandidate]:
+        """只返回尺寸签名与 ``name`` 完全一致（含同为无尺寸）的候选。"""
+        signature = size_signature(name)
+        return self._by_size.get(
+            (signature.mixture, signature.total, signature.active), []
+        )
 
 
 def _coerce_model_id(item: Any) -> str | None:
@@ -540,10 +558,9 @@ def match_arena_rows(
             continue
 
         fuzzy_hits: list[_IndexedCandidate] = []
-        for candidate in index.candidates:
-            if not sizes_compatible(name, candidate.model_id):
-                continue
-            if not has_size(candidate.model_id):
+        for candidate in index.same_size(name):
+            # same_size 已保证签名相等（含“双方都无尺寸”），这里只需排除无尺寸候选。
+            if not candidate.size[0] and not candidate.size[1] and not candidate.size[2]:
                 continue
             candidate_tokens = candidate.tokens
             row_extra = row_tokens - candidate_tokens

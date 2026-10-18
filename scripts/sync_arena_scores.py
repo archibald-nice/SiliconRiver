@@ -40,6 +40,7 @@ category（可另加 ``overall`` 汇总？不——上游本身就有 ``overall`
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from collections import defaultdict
@@ -67,6 +68,7 @@ except ImportError:  # pragma: no cover - dotenv 是 requirements 里的依赖
     pass
 
 LOGGER_NAME = "silicon_river.arena.sync"
+LOGGER = logging.getLogger(LOGGER_NAME)
 
 UPSERT_SQL = """
 INSERT INTO model_arena_info (model_id, source, rank, score, category, updated_at)
@@ -76,10 +78,13 @@ DO UPDATE SET
     rank = EXCLUDED.rank,
     score = EXCLUDED.score,
     updated_at = NOW()
-RETURNING (xmax = 0) AS inserted
 """
 
 SUPPORTED_SOURCES = ("lmarena", "swebench")
+
+# 一次性 executemany 三万条会把连接打挂（实测 ``SSL error: bad length`` + 连接丢失），
+# 按块提交：300 条一块实测 0.5-1.4 秒/块，稳。
+WRITE_CHUNK_SIZE = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,19 +205,35 @@ def collect_source(
 
 
 def write_rows(conn: psycopg.Connection, pending: Sequence[PendingRow]) -> tuple[int, int]:
-    inserted = updated = 0
+    """批量写 ``model_arena_info``，返回 (新增, 更新)。
+
+    逐行 ``execute`` 在 Supabase 上是灾难：单条 UPSERT 一次跨洋往返 ≈ 0.42 秒
+    （2026-10-18 实测 20 条 8.47 秒），三万多条要跑 4 小时，还会在中间撞上
+    ``statement timeout``。改成 ``executemany``（psycopg3 内部走 pipeline，一次
+    round-trip 发一批），新增/更新数靠写入前查一次已有 key 集合来判断
+    ——``executemany`` 拿不到逐行 ``RETURNING (xmax = 0)``。
+    """
+    if not pending:
+        return 0, 0
+
+    sources = sorted({row.source for row in pending})
+    keys = [(row.model_id, row.source, row.category) for row in pending]
     with conn.cursor() as cursor:
-        for row in pending:
-            cursor.execute(UPSERT_SQL, row.as_tuple())
-            result = cursor.fetchone()
-            if result is None:
-                raise RuntimeError(f"UPSERT 没有返回 xmax 标记：{row}")
-            if result[0]:
-                inserted += 1
-            else:
-                updated += 1
+        cursor.execute(
+            "SELECT model_id, source, category FROM model_arena_info WHERE source = ANY(%s)",
+            (sources,),
+        )
+        existing = {(r[0], r[1], r[2]) for r in cursor.fetchall()}
+        for start in range(0, len(pending), WRITE_CHUNK_SIZE):
+            chunk = pending[start : start + WRITE_CHUNK_SIZE]
+            cursor.executemany(UPSERT_SQL, [row.as_tuple() for row in chunk])
+            LOGGER.info(
+                "写入进度 %d/%d（%.1f%%）", start + len(chunk), len(pending),
+                100.0 * (start + len(chunk)) / len(pending),
+            )
     conn.commit()
-    return inserted, updated
+    inserted = sum(1 for key in keys if key not in existing)
+    return inserted, len(keys) - inserted
 
 
 def print_report(report: SourceReport, *, dry_run: bool, sample_size: int) -> None:
@@ -287,6 +308,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    # 同步一次要几分钟，写入进度必须看得见（默认 root logger 是 WARNING，
+    # 不配的话 INFO 全被丢掉，跑起来像卡死）。
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     if args.limit is not None and args.limit <= 0:
         print("[错误] --limit 必须是正整数", file=sys.stderr)

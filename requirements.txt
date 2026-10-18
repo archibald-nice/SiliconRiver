@@ -6,6 +6,8 @@ colorama==0.4.6
 filelock==3.19.1
 fsspec==2025.9.0
 huggingface-hub==0.35.3
+# LMArena 排行榜走 parquet 直读（/rows 接口带 token 也会 429），见 ISSUE-001
+pyarrow==26.0.0
 idna==3.10
 packaging==25.0
 psycopg[binary]==3.2.2

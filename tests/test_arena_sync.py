@@ -4,7 +4,8 @@
 
 * ``--dry-run`` 只发 SELECT，且连接被设为只读；
 * UPSERT 的 SQL 形态与参数顺序（``ON CONFLICT`` + ``updated_at=NOW()``）；
-* 用 ``RETURNING (xmax = 0)`` 区分插入/更新（仓库铁律 6，不能用 rowcount）；
+* 新增/更新数靠写入前查已有 key 集合判断——``executemany`` 拿不到逐行
+  ``RETURNING (xmax = 0)``，而逐行 ``execute`` 在 Supabase 上又要 0.42 秒/条；
 * 同一 (model_id, category) 的重复行去重取最好名次；
 * 抓取失败必须非 0 退出，不能静默。
 """
@@ -33,11 +34,18 @@ class FakeCursor:
     def execute(self, sql: str, params=None) -> None:
         normalized = " ".join(sql.split())
         self.conn.statements.append((normalized, list(params or [])))
-        if normalized.upper().startswith("SELECT"):
+        if "FROM model_arena_info" in normalized:
+            self._rows = [tuple(key) for key in self.conn.existing_keys]
+        elif normalized.upper().startswith("SELECT"):
             self._rows = [(model_id,) for model_id in self.conn.model_ids]
         else:
-            outcome = self.conn.outcomes.popleft()
-            self._rows = [(outcome,)]
+            self._rows = []
+
+    def executemany(self, sql: str, params_seq) -> None:
+        normalized = " ".join(sql.split())
+        for params in params_seq:
+            self.conn.statements.append((normalized, list(params or [])))
+        self._rows = []
 
     def fetchall(self) -> list[tuple]:
         return list(self._rows)
@@ -49,9 +57,9 @@ class FakeCursor:
 class FakeConnection:
     """最小 psycopg 连接替身：记录语句、按队列返回 xmax 标记。"""
 
-    def __init__(self, model_ids: list[str], outcomes: list[bool] | None = None):
+    def __init__(self, model_ids: list[str], existing_keys: set[tuple] | None = None):
         self.model_ids = model_ids
-        self.outcomes: deque[bool] = deque(outcomes or [])
+        self.existing_keys: set[tuple] = existing_keys or set()
         self.statements: list[tuple[str, list]] = []
         self.read_only = False
         self.commits = 0
@@ -73,8 +81,8 @@ class FakeConnection:
 def fake_connect(monkeypatch):
     """把 ``psycopg.connect`` 替换成可配置的假连接工厂。"""
 
-    def _install(model_ids: list[str], outcomes: list[bool] | None = None):
-        conn = FakeConnection(model_ids, outcomes)
+    def _install(model_ids: list[str], existing_keys: set[tuple] | None = None):
+        conn = FakeConnection(model_ids, existing_keys)
 
         def _connect(*args, **kwargs):  # noqa: ARG001
             return conn
@@ -145,7 +153,7 @@ def test_dry_run_prints_pending_rows(fake_connect, monkeypatch, capsys):
 
 
 def test_upsert_statement_shape_and_parameter_order(fake_connect, monkeypatch):
-    conn = fake_connect(["acme/model-70b"], outcomes=[True])
+    conn = fake_connect(["acme/model-70b"])
     monkeypatch.setattr(
         sync,
         "fetch_source_rows",
@@ -162,15 +170,16 @@ def test_upsert_statement_shape_and_parameter_order(fake_connect, monkeypatch):
     assert "INSERT INTO model_arena_info" in sql
     assert "ON CONFLICT (model_id, source, category)" in sql
     assert "updated_at = NOW()" in sql
-    assert "RETURNING (xmax = 0)" in sql
+    assert "RETURNING" not in sql.upper()
     assert "rowcount" not in sql.lower()
     assert params == ["acme/model-70b", "lmarena", 3, 71.5, "overall"]
     assert conn.commits == 1
 
 
-def test_xmax_flag_distinguishes_insert_and_update(fake_connect, monkeypatch, capsys):
+def test_inserted_updated_counts_come_from_existing_keys(fake_connect, monkeypatch, capsys):
     conn = fake_connect(
-        ["acme/a", "acme/b", "acme/c"], outcomes=[True, False, True]
+        ["acme/a", "acme/b", "acme/c"],
+        existing_keys={("acme/b", "lmarena", "overall")},
     )
     monkeypatch.setattr(
         sync,
@@ -204,7 +213,7 @@ def test_duplicate_rows_for_same_model_and_category_keep_best_rank():
 
 
 def test_unmatched_rows_are_reported_not_written(fake_connect, monkeypatch, capsys):
-    conn = fake_connect(["acme/model-70b"], outcomes=[])
+    conn = fake_connect(["acme/model-70b"])
     monkeypatch.setattr(
         sync,
         "fetch_source_rows",

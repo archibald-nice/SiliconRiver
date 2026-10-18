@@ -1,10 +1,11 @@
 """LMArena 抓取层离线测试（禁止真实网络）。
 
-覆盖三件事：
+覆盖四件事：
 
 1. 翻页 URL 拼接（offset/length，length 必须 ≤ 100）；
 2. ``/rows`` 响应解析（字段映射 + 脏行跳过）；
-3. 失败重试与重试耗尽后的失败语义（**不返回部分数据、不回落假数据**）。
+3. parquet 直读分支（首选路径）与它失败后的回落；
+4. 失败重试与重试耗尽后的失败语义（**不返回部分数据、不回落假数据**）。
 """
 from __future__ import annotations
 
@@ -21,6 +22,20 @@ class FakeResponse:
 
     def json(self):
         return self.payload
+
+
+@pytest.fixture(autouse=True)
+def _disable_parquet(monkeypatch):
+    """默认关掉 parquet 分支：下面的用例测的是 ``/rows`` 翻页逻辑。
+
+    parquet 分支有独立用例覆盖。不关掉的话它会读项目内 HF 缓存
+    （``data/cache/hf``），把真实的 11,033 行喂进断言。
+    """
+
+    def _disabled():
+        raise lmarena.ArenaFetchError("parquet disabled in tests")
+
+    monkeypatch.setattr(lmarena, "fetch_latest_parquet_files", _disabled)
 
 
 def _row_payload(total: int, model_name: str, category: str = "overall") -> dict:
@@ -243,3 +258,85 @@ def test_fetch_page_backs_off_longer_on_http_429(monkeypatch):
 
     lmarena.fetch_page(0, 100, max_retries=2)
     assert sleeps == [5.0]
+
+
+# ---------------------------------------------------------------------------
+# parquet 分支
+# ---------------------------------------------------------------------------
+
+
+def _parquet_record(model_name: str, category: str = "overall", **overrides) -> dict:
+    record = {
+        "model_name": model_name,
+        "organization": "Acme",
+        "category": category,
+        "rank": 3,
+        "rating": 1200.5,
+        "vote_count": 4321,
+        "leaderboard_publish_date": "2026-10-15",
+    }
+    record.update(overrides)
+    return record
+
+
+def test_parse_parquet_records_maps_columns_and_skips_bad_rows():
+    rows = lmarena.parse_parquet_records(
+        [
+            _parquet_record("claude-4"),
+            _parquet_record("", category="overall"),  # 缺 model_name
+            {"organization": "Acme"},  # 缺 category/model_name
+            "not-a-dict",
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0].model_name == "claude-4"
+    assert rows[0].score == 1200.5
+    assert rows[0].rank == 3
+    assert rows[0].vote_count == 4321
+    assert rows[0].publish_date == "2026-10-15"
+
+
+def test_fetch_latest_rows_prefers_parquet_and_never_pages(monkeypatch):
+    """parquet 是首选路径：不许再打 datasets-server 的 /rows（实测会 429）。"""
+    monkeypatch.setattr(
+        lmarena,
+        "fetch_latest_parquet_files",
+        lambda: [_parquet_record("claude-4"), _parquet_record("gpt-4o")],
+    )
+
+    def _forbidden(url, timeout=30):  # pragma: no cover - 走到这里就该失败
+        raise AssertionError("parquet 成功时不应请求 /rows")
+
+    monkeypatch.setattr(lmarena, "_http_get", _forbidden)
+
+    rows = lmarena.fetch_latest_rows()
+
+    assert [row.model_name for row in rows] == ["claude-4", "gpt-4o"]
+
+
+def test_fetch_latest_rows_respects_limit_on_parquet_path(monkeypatch):
+    monkeypatch.setattr(
+        lmarena,
+        "fetch_latest_parquet_files",
+        lambda: [_parquet_record(f"m{i}") for i in range(5)],
+    )
+
+    rows = lmarena.fetch_latest_rows(limit=2)
+
+    assert [row.model_name for row in rows] == ["m0", "m1"]
+
+
+def test_fetch_latest_rows_falls_back_to_rows_when_parquet_fails(monkeypatch):
+    monkeypatch.setattr(
+        lmarena,
+        "fetch_latest_parquet_files",
+        lambda: (_ for _ in ()).throw(lmarena.ArenaFetchError("boom")),
+    )
+    monkeypatch.setattr(
+        lmarena, "_http_get", lambda url, timeout=30: FakeResponse(_row_payload(1, "claude"))
+    )
+
+    rows = lmarena.fetch_latest_rows()
+
+    assert [row.model_name for row in rows] == ["claude"]
