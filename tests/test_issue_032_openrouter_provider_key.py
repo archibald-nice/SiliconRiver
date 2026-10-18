@@ -206,7 +206,9 @@ def test_no_zero_hit_warning_when_every_entry_matches(caplog):
     raw = [
         _raw("openai/gpt-4o", "OpenAI: GPT-4o"),
         _raw("gryphe/mythomax-l2-13b", "MythoMax 13B"),
-        _raw("~x-ai/grok-latest", "xAI: Grok Latest"),
+        # 不用 `~x-ai/grok-latest`：那是 ISSUE-004 之后要跳过的别名 id，
+        # 留着它会让 spacexai 在本 payload 里 0 命中，测不到「全命中不告警」。
+        _raw("x-ai/grok-4", "xAI: Grok 4"),
     ]
 
     _, stats = om.select_models(raw, ["openai", "gryphe", "spacexai"])
@@ -221,7 +223,13 @@ def test_empty_filter_never_warns_about_zero_hit(caplog):
 
     selected, stats = om.select_models([_raw("openai/gpt-4o", "OpenAI: GPT-4o")], [])
 
-    assert stats == {"upstream_total": 1, "matched_total": 1, "selected": 1, "dropped": 0}
+    assert stats == {
+        "upstream_total": 1,
+        "matched_total": 1,
+        "selected": 1,
+        "dropped": 0,
+        "skipped_variants": 0,
+    }
     assert len(selected) == 1
     assert _warning_records(caplog) == []
 

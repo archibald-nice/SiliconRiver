@@ -554,12 +554,39 @@ def fetch_provider_profile_html(provider_id: str) -> tuple[str, str | None]:
     return display_name or provider_id, avatar_url
 
 
+# ---------------------------------------------------------------------------
+# 大小写归一（ISSUE-004）
+# ---------------------------------------------------------------------------
+# 同一模型会在两个源里出现两种写法：HF 保留 org 原始大小写（`Qwen/Qwen3.6-27B`），
+# OpenRouter 一律小写（`qwen/qwen3.6-27b`）。两者在 `models` 里就是两行、时间轴上是
+# 两个节点（生产库实测 29 组 / 60 行，占全库 18% 重复的一部分）。
+#
+# 这里的做法是「写入时归一到已存在的那一行」：不再新建大小写变体，把本次抓到的字段
+# 更新到先入库的那一行上；provider 只在大小写之外真的不同时才覆盖，避免 `Qwen`/`qwen`
+# 这种展示名被两个源来回改写（命名统一属 ISSUE-005，还没定）。
+def resolve_case_variant(cursor, model_id: str) -> str | None:
+    """返回库里与 ``model_id`` 仅大小写不同的既有 model_id；没有则 None。"""
+    if not model_id:
+        return None
+    cursor.execute(
+        "SELECT model_id FROM models WHERE lower(model_id) = lower(%s) LIMIT 1",
+        (model_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    existing = row[0]
+    return existing if existing != model_id else None
+
+
 def save_models(conn: psycopg.Connection, provider: str, records: Iterable[ModelRecord], *, started_at: datetime) -> tuple[int, int]:
     processed = 0
     inserted = 0
     with conn.cursor() as cursor:
         for record in records:
             processed += 1
+            # ISSUE-004：同一模型另一种大小写已在库里时，写到既有那行上，别再建一行。
+            target_id = resolve_case_variant(cursor, record.model_id) or record.model_id
             cursor.execute(
                 """
                 INSERT INTO models (
@@ -568,7 +595,10 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     is_open_source, price, huggingface_rank
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (model_id) DO UPDATE SET
-                    provider = EXCLUDED.provider,
+                    provider = CASE
+                        WHEN lower(models.provider) = lower(EXCLUDED.provider) THEN models.provider
+                        ELSE EXCLUDED.provider
+                    END,
                     model_name = EXCLUDED.model_name,
                     description = EXCLUDED.description,
                     tags = EXCLUDED.tags,
@@ -583,7 +613,7 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                 RETURNING (xmax = 0) AS is_insert
                 """,
                 (
-                    record.model_id,
+                    target_id,
                     record.provider,
                     record.model_name,
                     record.description,
@@ -603,10 +633,10 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
             # xmax = 0 表示这一行是本次 INSERT 产生的（新行），否则是被 UPDATE 的旧行。
             inserted_row = cursor.fetchone()
             is_insert = bool(inserted_row and inserted_row[0])
-            cursor.execute("DELETE FROM model_tags WHERE model_id = %s", (record.model_id,))
+            cursor.execute("DELETE FROM model_tags WHERE model_id = %s", (target_id,))
             if record.tags:
                 tag_rows = [
-                    (record.model_id, tag, record.inserted_at)
+                    (target_id, tag, record.inserted_at)
                     for tag in record.tags
                 ]
                 cursor.executemany(
@@ -640,11 +670,18 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
 
 
 def fetch_and_store(limit: int = 50) -> dict[str, tuple[int, int]]:
+    """按 PROVIDERS 逐家抓 HF 模型。
+
+    ``limit`` 是**每家**的抓取窗口；``<= 0`` 表示不限制（交给 huggingface_hub 分页拉全）。
+    窗口用满时会打 WARNING —— 与 ISSUE-030 同一类坑：上限把模型无声截断，
+    表现是「某家模型比官网少」，不报错也没人发现（ISSUE-031：新增 org 动辄 200+ 个模型）。
+    """
     client = hf_client()
     providers = get_providers(os.getenv("PROVIDERS"))
     if not providers:
         raise RuntimeError("PROVIDERS is not configured. Set it in environment or .env file.")
 
+    effective_limit = limit if limit and limit > 0 else None
     results: dict[str, tuple[int, int]] = {}
     token = os.getenv("HF_TOKEN")
     with ensure_db() as conn:
@@ -660,11 +697,18 @@ def fetch_and_store(limit: int = 50) -> dict[str, tuple[int, int]]:
                 author=provider,
                 sort="lastModified",
                 direction=-1,
-                limit=limit,
+                limit=effective_limit,
                 full=True,
             )
             # 必须先物化：拉 README 简介需要先拿到全部 model_id 才能并发
             infos = list(models_iter)
+            if effective_limit is not None and len(infos) >= effective_limit:
+                LOGGER.warning(
+                    "Provider %s：抓取窗口 %s 条已用满，大概率还有模型被截断"
+                    "（HF_DAILY_FETCH_LIMIT，设 0 表示不限）",
+                    provider,
+                    effective_limit,
+                )
 
             # 只给「还没有简介」的模型拉 README。
             #   首次抓取：492 个全拉；

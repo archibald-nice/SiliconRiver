@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,8 @@ from urllib.parse import quote
 import psycopg
 import requests
 from dotenv import load_dotenv
+
+from src.scraper.fetch_models import resolve_case_variant
 
 try:
     from scripts.init_db import create_schema  # type: ignore
@@ -27,6 +30,26 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_PATH = BASE_DIR / ".env"
 DEFAULT_DB_URL = "postgresql://USER:PASSWORD@HOST:5432/silicon_river"
 DEFAULT_ENDPOINT = "https://openrouter.ai/api/v1/models"
+
+# ISSUE-004（2026-10-18）：OpenRouter 的「变体」不是独立发布，抓进来只会让同一个模型
+# 在时间轴上出现两三次：
+#   - 路由变体 `:batch` / `:free` / `:nitro` / `:extended` / `:online` / `:thinking` / `:floor`
+#     （实测 92 行带冒号，其中 `:batch` 78、`:free` 14）；
+#   - 隐藏/路由别名 `~x-ai/grok-latest` 这类带 `~` 前缀的 id（17 行）。
+# 生产库 1707 行里，「变体后缀」一类重复就有 80 组 / 160 行（docs/issues/004）。
+# 这些 id 照抓的话每次同步都会重建一遍重复，所以在选择阶段直接跳过。
+_VARIANT_SUFFIX_RE = re.compile(
+    r":(?:free|batch|nitro|extended|online|thinking|floor)\b", re.IGNORECASE
+)
+
+
+def is_variant_id(model_id: str | None) -> bool:
+    """是否是 OpenRouter 的变体/别名 id（不该作为独立模型入库，ISSUE-004）。"""
+    if not model_id:
+        return False
+    if model_id.lstrip().startswith("~"):
+        return True
+    return bool(_VARIANT_SUFFIX_RE.search(model_id))
 
 # ISSUE-032：provider key 别名表。键既可能是 model_id 的斜杠前缀，也可能是 name 里
 # 冒号前的展示名，值统一成 `PROVIDERS_OPENROUTER` 白名单收录的写法。
@@ -235,6 +258,9 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
     with conn.cursor() as cursor:
         for record in records:
             processed += 1
+            # ISSUE-004：`qwen/qwen3.6-27b` 与 HF 的 `Qwen/Qwen3.6-27B` 是同一个模型，
+            # 归一到先入库的那一行，别再建大小写变体。
+            target_id = resolve_case_variant(cursor, record.model_id) or record.model_id
             cursor.execute(
                 """
                 INSERT INTO models (
@@ -243,7 +269,10 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     price, is_open_source, huggingface_rank
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (model_id) DO UPDATE SET
-                    provider = EXCLUDED.provider,
+                    provider = CASE
+                        WHEN lower(models.provider) = lower(EXCLUDED.provider) THEN models.provider
+                        ELSE EXCLUDED.provider
+                    END,
                     model_name = EXCLUDED.model_name,
                     description = EXCLUDED.description,
                     tags = EXCLUDED.tags,
@@ -256,7 +285,7 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                 RETURNING (xmax = 0) AS is_insert
                 """,
                 (
-                    record.model_id,
+                    target_id,
                     provider,
                     record.model_name,
                     record.description,
@@ -314,6 +343,16 @@ def select_models(
         matched = [item for item in raw_models if provider_key_for(item) in providers_filter]
     else:
         matched = list(raw_models)
+
+    # ISSUE-004：变体/别名 id 先剔除，再参与截断计数（它们不是独立发布）。
+    variants = [item for item in matched if is_variant_id(item.get("id"))]
+    if variants:
+        matched = [item for item in matched if not is_variant_id(item.get("id"))]
+        logger.info(
+            "跳过 %s 个 OpenRouter 变体/别名 id（:free/:batch/~latest 之类不是独立发布，ISSUE-004）：%s",
+            len(variants),
+            ", ".join(str(item.get("id")) for item in variants[:5]),
+        )
     matched_total = len(matched)
 
     # ISSUE-032：白名单里一条都没匹配到的条目必须告警。旧实现完全静默，
@@ -359,6 +398,7 @@ def select_models(
         "matched_total": matched_total,
         "selected": len(selected),
         "dropped": dropped,
+        "skipped_variants": len(variants),
     }
 
 

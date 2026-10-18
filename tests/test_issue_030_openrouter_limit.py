@@ -24,7 +24,9 @@ LOGGER_NAME = "silicon_river.fetch.openrouter"
 # 列上 mistral / spacexai 会让本文件里多处 `_warning_records(caplog) == []` 误报失败。
 WHITELIST = ["openai", "mancer"]
 
-# 复刻 issue 里的真实尾部：6 条命中白名单，3 条不命中，全部排在第 462 条之后。
+# 复刻 issue 里的真实尾部：5 条命中白名单，3 条不命中，全部排在第 462 条之后。
+# 真实上游尾部还有 `openai/gpt-3.5-turbo:batch`（`:` 变体），ISSUE-004 起在选择阶段
+# 就被跳过、不再入库，所以这里不再把它算进「应命中」清单。
 TAIL_MODELS = [
     {"id": "filler/late-0", "name": "Filler Late 0: Model"},
     {"id": "openai/gpt-3.5-turbo-instruct", "name": "OpenAI: GPT-3.5 Turbo Instruct"},
@@ -33,7 +35,6 @@ TAIL_MODELS = [
     {"id": "filler/late-1", "name": "Filler Late 1: Model"},
     {"id": "filler/late-2", "name": "Filler Late 2: Model"},
     {"id": "openai/gpt-3.5-turbo", "name": "OpenAI: GPT-3.5 Turbo"},
-    {"id": "openai/gpt-3.5-turbo:batch", "name": "OpenAI: GPT-3.5 Turbo Batch"},
     {"id": "openai/gpt-4", "name": "OpenAI: GPT-4"},
 ]
 TAIL_WHITELISTED_IDS = [
@@ -41,7 +42,6 @@ TAIL_WHITELISTED_IDS = [
     "openai/gpt-3.5-turbo-16k",
     "mancer/weaver",
     "openai/gpt-3.5-turbo",
-    "openai/gpt-3.5-turbo:batch",
     "openai/gpt-4",
 ]
 
@@ -56,7 +56,7 @@ def _filler_models(count: int) -> list[dict]:
 
 
 def _upstream_payload() -> list[dict]:
-    """462 条不命中 + 9 条尾部（其中 6 条命中）= 471 条，对齐 2026-10-18 实测上游。"""
+    """462 条不命中 + 8 条尾部（其中 5 条命中）= 470 条，对齐 2026-10-18 实测上游。"""
     return _filler_models(462) + TAIL_MODELS
 
 
@@ -74,15 +74,21 @@ def _warning_records(caplog) -> list[logging.LogRecord]:
 
 
 def test_tail_whitelisted_models_survive_upstream_larger_than_limit(caplog):
-    """上游 471 条 > 窗口 462 条：排在窗口之后的 6 条白名单模型一条都不能少。"""
+    """上游 470 条 > 窗口 462 条：排在窗口之后的 5 条白名单模型一条都不能少。"""
     caplog.set_level(logging.INFO, logger=LOGGER_NAME)
 
     selected, stats = om.select_models(_upstream_payload(), WHITELIST, limit=462)
 
     selected_ids = [item["id"] for item in selected]
     assert selected_ids == TAIL_WHITELISTED_IDS
-    # 过滤发生在截断之前 → 命中数 6 < 窗口 462，压根没截断，所以不能有 WARNING
-    assert stats == {"upstream_total": 471, "matched_total": 6, "selected": 6, "dropped": 0}
+    # 过滤发生在截断之前 → 命中数 5 < 窗口 462，压根没截断，所以不能有 WARNING
+    assert stats == {
+        "upstream_total": 470,
+        "matched_total": 5,
+        "selected": 5,
+        "dropped": 0,
+        "skipped_variants": 0,
+    }
     assert _warning_records(caplog) == []
 
 
@@ -114,7 +120,13 @@ def test_real_truncation_emits_warning_with_counts(caplog):
     selected, stats = om.select_models(raw, WHITELIST, limit=1)
 
     assert len(selected) == 1
-    assert stats == {"upstream_total": 13, "matched_total": 3, "selected": 1, "dropped": 2}
+    assert stats == {
+        "upstream_total": 13,
+        "matched_total": 3,
+        "selected": 1,
+        "dropped": 2,
+        "skipped_variants": 0,
+    }
 
     warnings = _warning_records(caplog)
     assert len(warnings) == 1
@@ -144,7 +156,13 @@ def test_empty_whitelist_means_no_filter(caplog):
     selected, stats = om.select_models(_upstream_payload(), [], limit=462)
 
     assert len(selected) == 462
-    assert stats == {"upstream_total": 471, "matched_total": 471, "selected": 462, "dropped": 9}
+    assert stats == {
+        "upstream_total": 470,
+        "matched_total": 470,
+        "selected": 462,
+        "dropped": 8,
+        "skipped_variants": 0,
+    }
     assert len(_warning_records(caplog)) == 1
 
 
@@ -198,7 +216,7 @@ def test_fetch_and_store_keeps_every_tail_whitelisted_model(patched_pipeline, ca
 
     assert sorted(patched_pipeline.saved) == sorted(TAIL_WHITELISTED_IDS)
     assert not any(model_id.startswith("filler/") for model_id in patched_pipeline.saved)
-    assert summary == {"openai": (5, 5), "mancer": (1, 1)}
+    assert summary == {"openai": (4, 4), "mancer": (1, 1)}
     assert _warning_records(caplog) == []
 
 
@@ -212,7 +230,7 @@ def test_fetch_and_store_warns_and_keeps_first_matched_models(patched_pipeline, 
     assert summary == {"openai": (2, 2)}
     warnings = _warning_records(caplog)
     assert len(warnings) == 1
-    assert "丢弃 4 条" in warnings[0].getMessage()
+    assert "丢弃 3 条" in warnings[0].getMessage()
 
 
 # ---------------------------------------------------------------------------
