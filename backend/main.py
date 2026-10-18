@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathLib
 from typing import Dict, List, Optional
+from urllib.parse import urlsplit
 
 import psycopg
 import httpx
@@ -19,6 +20,7 @@ from fastapi.responses import Response
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, ConfigDict
+from starlette.concurrency import run_in_threadpool
 
 # 兼容两种运行布局，保证 `models` 在两种情况下都可被导入：
 #   1) 本地开发：从项目根执行 `uvicorn backend.main:app`
@@ -52,9 +54,30 @@ if ENV_PATH.exists():
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://USER:PASSWORD@HOST:5432/silicon_river")
 # 数据库连接超时（秒）：数据库不可达时快速失败，不让请求挂到平台超时
 DB_CONNECT_TIMEOUT = float(os.getenv("DB_CONNECT_TIMEOUT", "10"))
+# 语句级超时（毫秒）：库侧慢查询 / 等锁时的止损点。
+# connect_timeout 只管建连、池的 timeout 只管取连接，查询本身在这之前没有任何上限。
+DB_STATEMENT_TIMEOUT_MS = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "5000"))
 AVATAR_FETCH_TIMEOUT = float(os.getenv("AVATAR_FETCH_TIMEOUT", "6"))
 AVATAR_CACHE_TTL = int(os.getenv("AVATAR_CACHE_TTL", "86400"))
 AVATAR_MAX_BYTES = int(os.getenv("AVATAR_MAX_BYTES", "524288"))
+# 头像回退抓取的域名白名单（SSRF 面收敛）：providers.avatar_url 由抓取脚本从上游写入，
+# 接口侧不能把它当可信输入——否则「能写 providers 表」就等于「能让服务端请求任意地址」。
+# 逗号分隔；子域名自动放行（huggingface.co 覆盖 cdn-avatars.huggingface.co）。
+# 默认值取自线上 providers.avatar_url 的实测主机：目前只有 cdn-avatars.huggingface.co；
+# huggingface.co / avatars.githubusercontent.com / openrouter.ai 是这三个上游的已知头像源。
+AVATAR_ALLOWED_HOSTS = [
+    host.strip().lower()
+    for host in os.getenv(
+        "AVATAR_ALLOWED_HOSTS",
+        "cdn-avatars.huggingface.co,huggingface.co,avatars.githubusercontent.com,openrouter.ai",
+    ).split(",")
+    if host.strip()
+]
+# 最多跟随几次重定向：每一次跳转后的目标都要重新过白名单（不能只校验第一个 URL）。
+AVATAR_MAX_REDIRECTS = int(os.getenv("AVATAR_MAX_REDIRECTS", "3"))
+# 搜索串长度上限：真实模型名/关键词远短于此；超长串要么是误用，要么是想拿全表扫描
+# 当廉价入口。超长直接 422 拒绝而不是截断——截断会把「搜到别的东西」藏起来。
+SEARCH_MAX_LENGTH = 64
 
 # ---------- 数据库连接池参数 ----------
 # min_size=0：冷启动不抢连接，空闲时也不占着 Supabase 的连接配额。
@@ -71,6 +94,22 @@ _pool: Optional[ConnectionPool] = None
 _pool_lock = threading.Lock()
 
 
+def _configure_connection(conn: psycopg.Connection) -> None:
+    """每条新连接建立后设置语句级超时。
+
+    为什么不用 connect 的 `options="-c statement_timeout=..."`：`options` 是启动报文
+    参数，Postgres 随后会再套用角色/库级设置，后者**覆盖**它。实测（2026-10-18，
+    Supabase 5432 Session Pooler）传 `options="-c statement_timeout=5000"` 建连不报错，
+    但 `current_setting('statement_timeout')` 仍是角色默认的 `2min` —— 也就是静默无效。
+    连接建立后再 `SET` 才真正生效（同一环境实测值为 `5s`）。
+
+    没配 configure 回调时池只负责建连；回调里若留下未结事务，psycopg_pool 会
+    直接丢弃这条连接（它要求回调结束时连接处于 IDLE），所以 SET 之后必须 commit。
+    """
+    conn.execute(f"SET statement_timeout = {DB_STATEMENT_TIMEOUT_MS}")
+    conn.commit()
+
+
 def get_pool() -> ConnectionPool:
     """返回进程级连接池，首次调用时惰性建立。
 
@@ -84,6 +123,8 @@ def get_pool() -> ConnectionPool:
       （6543 端口，Supavisor/PgBouncer）不支持预编译语句，开着会报
       "prepared statement ... already exists" 之类的间歇性错误。
     - connect_timeout：数据库不可达时快速失败，避免函数一直挂到平台超时。
+
+    语句级超时由 `configure` 回调设置（见 `_configure_connection`），不在 kwargs 里。
     """
     global _pool
     if _pool is not None and not _pool.closed:
@@ -102,6 +143,7 @@ def get_pool() -> ConnectionPool:
                     "prepare_threshold": None,
                     "connect_timeout": DB_CONNECT_TIMEOUT,
                 },
+                configure=_configure_connection,
                 open=False,
                 name="silicon-river",
             )
@@ -181,8 +223,8 @@ def list_models(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     provider: Optional[str] = None,
-    tag: Optional[str] = None,
-    search: Optional[str] = None,
+    tag: Optional[str] = Query(None, max_length=SEARCH_MAX_LENGTH),
+    search: Optional[str] = Query(None, max_length=SEARCH_MAX_LENGTH),
     conn: psycopg.Connection = Depends(get_db),
 ):
     offset = (page - 1) * page_size
@@ -193,11 +235,11 @@ def list_models(
         filters.append("provider = %s")
         params.append(provider)
     if tag:
-        filters.append("tags ILIKE %s")
-        params.append(f"%{tag}%")
+        filters.append("tags ILIKE %s ESCAPE '\\'")
+        params.append(f"%{_escape_like(tag)}%")
     if search:
-        filters.append("(model_name ILIKE %s OR description ILIKE %s)")
-        params.extend([f"%{search}%", f"%{search}%"])
+        filters.append("(model_name ILIKE %s ESCAPE '\\' OR description ILIKE %s ESCAPE '\\')")
+        params.extend([f"%{_escape_like(search)}%", f"%{_escape_like(search)}%"])
 
     where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
 
@@ -242,7 +284,7 @@ def list_analyzed_models(
     page_size: int = Query(20, ge=1, le=100),
     provider: Optional[str] = None,
     feature: Optional[str] = None,
-    search: Optional[str] = None,
+    search: Optional[str] = Query(None, max_length=SEARCH_MAX_LENGTH),
     conn: psycopg.Connection = Depends(get_db),
 ):
     """获取已分析的模型列表。支持按提供商、特征、搜索过滤。"""
@@ -257,8 +299,13 @@ def list_analyzed_models(
         filters.append("%s = ANY(ma.key_features)")
         params.append(feature)
     if search:
-        filters.append("(COALESCE(ma.model_name, m.model_name) ILIKE %s OR m.description ILIKE %s OR ma.analysis_summary ILIKE %s)")
-        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+        filters.append(
+            "(COALESCE(ma.model_name, m.model_name) ILIKE %s ESCAPE '\\' "
+            "OR m.description ILIKE %s ESCAPE '\\' "
+            "OR ma.analysis_summary ILIKE %s ESCAPE '\\')"
+        )
+        like = f"%{_escape_like(search)}%"
+        params.extend([like, like, like])
 
     where_clause = " AND ".join(filters) if filters else "1=1"
 
@@ -329,7 +376,7 @@ def timeline_models(
     page_size: int = Query(200, ge=10, le=500),
     sort: str = Query("asc", pattern="^(asc|desc)$"),
     provider: Optional[str] = Query(None),
-    model_name: Optional[str] = Query(None),
+    model_name: Optional[str] = Query(None, max_length=SEARCH_MAX_LENGTH),
     open_source: Optional[bool] = Query(None),
     conn: psycopg.Connection = Depends(get_db),
 ):
@@ -349,8 +396,8 @@ def timeline_models(
         filters.append("m.provider = %s")
         params.append(provider)
     if model_name:
-        filters.append("m.model_name ILIKE %s")
-        params.append(f"%{model_name}%")
+        filters.append("m.model_name ILIKE %s ESCAPE '\\'")
+        params.append(f"%{_escape_like(model_name)}%")
     if open_source is True:
         filters.append("m.is_open_source = TRUE")
     elif open_source is False:
@@ -442,24 +489,111 @@ def provider_stats(conn: psycopg.Connection = Depends(get_db)):
     return [ProviderStat(provider=row["provider"], model_count=row["model_count"]) for row in rows]
 
 
-@app.get("/api/providers/{provider_id}/avatar")
-async def provider_avatar(provider_id: str, conn: psycopg.Connection = Depends(get_db)):
-    """按需缓存并回传厂商头像。
-
-    这是唯一的 async 路由：需要 await 上游 HTTP 请求。
-    """
+def _load_provider_avatar_row(conn: psycopg.Connection, provider_id: str) -> Optional[dict]:
+    """读取厂商头像字段（同步；路由里必须经 run_in_threadpool 调用）。"""
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             "SELECT avatar_blob, avatar_mime, avatar_url FROM providers WHERE provider_id = %s",
             (provider_id,),
         )
-        row = cursor.fetchone()
+        return cursor.fetchone()
+
+
+def _cache_provider_avatar(
+    conn: psycopg.Connection, provider_id: str, content: bytes, content_type: str
+) -> None:
+    """把上游图片写进 providers.avatar_blob（同步；同样走线程池）。
+
+    缓存写失败不影响本次响应：图片已经拿到了，没写进去只是下次再抓一遍。
+    """
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE providers
+                SET avatar_blob = %s, avatar_mime = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE provider_id = %s
+                """,
+                (content, content_type, provider_id),
+            )
+        conn.commit()
+    except Exception:  # pragma: no cover - cache write failure
+        conn.rollback()
+
+
+def _avatar_target_allowed(url: str) -> bool:
+    """头像抓取目标是否可信：http/https + 白名单主机 + 常规端口。
+
+    `avatar_url` 是数据库里的值（抓取脚本从上写入），本身不可信；不校验的话
+    「能写 providers 表」就等于「能让服务端请求任意地址」（SSRF）。
+    主机按「等于白名单项或其子域」匹配：`huggingface.co` 覆盖
+    `cdn-avatars.huggingface.co`，同时挡掉 `huggingface.co.evil.com` 这种后缀伪装
+    （`host.endswith("." + allowed)` 前面必须有分隔点，斜杠/用户名也解析不出来）。
+    """
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if port not in (None, 80, 443):
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    return any(host == allowed or host.endswith("." + allowed) for allowed in AVATAR_ALLOWED_HOSTS)
+
+
+async def _fetch_avatar_upstream(avatar_url: str) -> httpx.Response:
+    """抓取头像，重定向逐跳校验并限制次数。
+
+    不用 `follow_redirects=True`：那样只有第一个 URL 受校验，上游回一个 302
+    （甚至指向 169.254.169.254）就能绕过白名单。
+
+    首跳的校验放在建客户端之前：被拒的 URL 不该取决于客户端能否建起来
+    （例如本机 `all_proxy=socks5://` 又没装 socksio 时 httpx 建客户端就抛 ImportError，
+    那会把一个本该 403 的请求变成 500）。
+    """
+    if not _avatar_target_allowed(avatar_url):
+        raise HTTPException(status_code=403, detail="Avatar source is not allowed")
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(AVATAR_FETCH_TIMEOUT, connect=AVATAR_FETCH_TIMEOUT),
+        follow_redirects=False,
+        headers={"Accept": "image/*"},
+    ) as client:
+        url = avatar_url
+        for _ in range(AVATAR_MAX_REDIRECTS + 1):
+            upstream = await client.get(url)
+            next_request = upstream.next_request
+            if next_request is None:
+                return upstream
+            await upstream.aclose()
+            url = str(next_request.url)
+            if not _avatar_target_allowed(url):
+                raise HTTPException(status_code=403, detail="Avatar source is not allowed")
+    raise HTTPException(status_code=502, detail="Too many avatar redirects")
+
+
+@app.get("/api/providers/{provider_id}/avatar")
+async def provider_avatar(provider_id: str, conn: psycopg.Connection = Depends(get_db)):
+    """按需缓存并回传厂商头像。
+
+    这是唯一的 async 路由：需要 await 上游 HTTP 请求。但 psycopg 是**同步**驱动，
+    所以两处数据库读/写都经 `run_in_threadpool` 挪出事件循环——直接在 async 函数里
+    调 `conn.cursor()` / `conn.commit()` 会卡住整个实例的并发（ISSUE-018）。
+
+    上游 URL 来自数据库，不能当可信输入：协议 + 域名白名单、重定向逐跳校验、
+    只接受 `image/*` 的响应才算图片（ISSUE-019）。
+    """
+    row = await run_in_threadpool(_load_provider_avatar_row, conn, provider_id)
     if not row:
         raise HTTPException(status_code=404, detail="Provider not found")
 
     avatar_blob = row.get("avatar_blob")
     avatar_mime = row.get("avatar_mime") or "image/png"
     if avatar_blob:
+        # 已有缓存字节的厂商完全不受本次改动影响：不发请求、也不过白名单
         headers = {"Cache-Control": f"public, max-age={AVATAR_CACHE_TTL}"}
         return Response(content=avatar_blob, media_type=avatar_mime, headers=headers)
 
@@ -468,12 +602,7 @@ async def provider_avatar(provider_id: str, conn: psycopg.Connection = Depends(g
         raise HTTPException(status_code=404, detail="Avatar unavailable")
 
     try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(AVATAR_FETCH_TIMEOUT, connect=AVATAR_FETCH_TIMEOUT),
-            follow_redirects=True,
-            headers={"Accept": "image/*,application/octet-stream;q=0.9"},
-        ) as client:
-            upstream = await client.get(avatar_url)
+        upstream = await _fetch_avatar_upstream(avatar_url)
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch avatar: {exc}") from exc
 
@@ -485,29 +614,40 @@ async def provider_avatar(provider_id: str, conn: psycopg.Connection = Depends(g
         raise HTTPException(status_code=upstream.status_code, detail="Avatar fetch error")
 
     content = upstream.content
-    content_type = upstream.headers.get("content-type", "image/png")
-    if len(content) <= AVATAR_MAX_BYTES:
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    UPDATE providers
-                    SET avatar_blob = %s, avatar_mime = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE provider_id = %s
-                    """,
-                    (content, content_type, provider_id),
-                )
-            conn.commit()
-        except Exception:  # pragma: no cover - cache write failure
-            conn.rollback()
+    content_type = (upstream.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if not content_type.startswith("image/"):
+        # 以前这里会把上游的 content-type 原样回传并缓存，文本/HTML 也能当头像落库
+        raise HTTPException(status_code=502, detail="Avatar source did not return an image")
+    if not content:
+        raise HTTPException(status_code=502, detail="Avatar source returned an empty body")
 
-    headers = {"Cache-Control": f"public, max-age={AVATAR_CACHE_TTL}"}
+    if len(content) <= AVATAR_MAX_BYTES:
+        await run_in_threadpool(
+            _cache_provider_avatar, conn, provider_id, content, content_type
+        )
+
+    headers = {
+        "Cache-Control": f"public, max-age={AVATAR_CACHE_TTL}",
+        "X-Content-Type-Options": "nosniff",
+    }
     for header in ("ETag", "Last-Modified"):
         value = upstream.headers.get(header)
         if value:
             headers[header] = value
 
     return Response(content=content, media_type=content_type, headers=headers)
+
+
+def _escape_like(value: str) -> str:
+    """把 LIKE/ILIKE 元字符转成字面量。
+
+    参数绑定只防 SQL 注入，**不处理通配符**：`%{value}%` 里的模式串仍然会把用户
+    输入的 `%` / `_` 当成通配符（输入一个 `%` 就等于取消搜索，输入 `_` 会匹配任意
+    单字符）。转义顺序必须先是反斜杠，否则会把后面加的转义符再转一遍。
+
+    配套的 SQL 里都要写 `ESCAPE '\\'`，让 Postgres 用反斜杠当转义符。
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _calculate_timeline_window(preset: str, year: Optional[int]) -> tuple[datetime, datetime, str]:
