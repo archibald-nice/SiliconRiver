@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery, type QueryObserverResult } from "@tanstack/react-query";
 
 import {
@@ -73,6 +73,8 @@ const HomeWithAnalysis = () => {
   const [timelineOpenSource, setTimelineOpenSource] = useState<"all" | "open" | "closed">("all");
   const [timelineMode, setTimelineMode] = useState<TimelineModeName>("helix");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  // 进入搜索前的时间范围：搜索会把范围改成「不限」，清空搜索时用它还原（ISSUE-014）
+  const rangeBeforeSearchRef = useRef<TimelinePresetRange | null>(null);
 
   const { data: providerStats } = useQuery<ProviderStat[]>({
     queryKey: ["provider-stats"],
@@ -102,7 +104,9 @@ const HomeWithAnalysis = () => {
           ],
           queryFn: () =>
             fetchTimeline({
-              preset: timelineRange,
+              // 自定义年份与 preset 互斥：后端在 year 存在时会忽略 preset，
+              // 这里直接不传，避免请求里出现「近一年 + 具体年份」的语义矛盾（ISSUE-028）
+              preset: timelineYear !== null ? undefined : timelineRange,
               year: timelineYear,
               page: pageNumber,
               page_size: TIMELINE_PAGE_SIZE,
@@ -193,6 +197,10 @@ const HomeWithAnalysis = () => {
           setTimelineSearchFilter(trimmed);
           setTimelineLoadedPages(1);
           if (trimmed.length > 0) {
+            // 只记住第一次进入搜索前的范围，重复提交不覆盖（ISSUE-014）
+            if (rangeBeforeSearchRef.current === null) {
+              rangeBeforeSearchRef.current = timelineRange;
+            }
             setTimelineRange("all");
             setTimelineYear(null);
           }
@@ -201,17 +209,23 @@ const HomeWithAnalysis = () => {
           setTimelineSearchFilter("");
           setTimelineSearchInput("");
           setTimelineLoadedPages(1);
-          if (timelineRange === "all") {
-            setTimelineRange("30d");
+          // 还原进入搜索前的时间范围，而不是硬编码回 "30d"（ISSUE-014）
+          const rememberedRange = rangeBeforeSearchRef.current;
+          rangeBeforeSearchRef.current = null;
+          if (rememberedRange !== null) {
+            setTimelineRange(rememberedRange);
             setTimelineYear(null);
           }
         }}
         onPresetChange={(range: TimelinePresetRange) => {
+          // 用户显式改范围后，不再用搜索前的记忆覆盖（ISSUE-014）
+          rangeBeforeSearchRef.current = null;
           setTimelineRange(range);
           setTimelineYear(null);
           setTimelineLoadedPages(1);
         }}
         onCustomYearChange={(year: number | null) => {
+          rangeBeforeSearchRef.current = null;
           setTimelineYear(year);
           if (year !== null) {
             setTimelineRange("1y");
@@ -272,9 +286,9 @@ const HomeWithAnalysis = () => {
           {/* 内容区域 */}
           <div className="min-h-0 flex-1 overflow-hidden p-4">
             {isTimelineLoading ? (
-              <p className="text-center text-sm text-text-muted">Loading timeline...</p>
+              <p className="text-center text-sm text-text-muted">时间轴加载中…</p>
             ) : timelineItems.length === 0 ? (
-              <p className="text-center text-sm text-text-muted">No models available in this range.</p>
+              <p className="text-center text-sm text-text-muted">该范围内暂无模型</p>
             ) : (
               <div className="h-full w-full">
                 <Timeline3D models={timelineItems} mode={timelineMode} />
@@ -309,6 +323,10 @@ const HomeWithAnalysis = () => {
                 setTimelineSearchFilter(trimmed);
                 setTimelineLoadedPages(1);
                 if (trimmed.length > 0) {
+                  // 只记住第一次进入搜索前的范围，重复提交不覆盖（ISSUE-014）
+                  if (rangeBeforeSearchRef.current === null) {
+                    rangeBeforeSearchRef.current = timelineRange;
+                  }
                   setTimelineRange("all");
                   setTimelineYear(null);
                 }
@@ -317,17 +335,23 @@ const HomeWithAnalysis = () => {
                 setTimelineSearchFilter("");
                 setTimelineSearchInput("");
                 setTimelineLoadedPages(1);
-                if (timelineRange === "all") {
-                  setTimelineRange("30d");
+                // 还原进入搜索前的时间范围，而不是硬编码回 "30d"（ISSUE-014）
+                const rememberedRange = rangeBeforeSearchRef.current;
+                rangeBeforeSearchRef.current = null;
+                if (rememberedRange !== null) {
+                  setTimelineRange(rememberedRange);
                   setTimelineYear(null);
                 }
               }}
               onPresetChange={(range) => {
+                // 用户显式改范围后，不再用搜索前的记忆覆盖（ISSUE-014）
+                rangeBeforeSearchRef.current = null;
                 setTimelineRange(range);
                 setTimelineYear(null);
                 setTimelineLoadedPages(1);
               }}
               onCustomYearChange={(year) => {
+                rangeBeforeSearchRef.current = null;
                 setTimelineYear(year);
                 if (year !== null) {
                   setTimelineRange("1y");

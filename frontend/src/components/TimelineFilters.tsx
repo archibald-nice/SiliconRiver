@@ -25,6 +25,10 @@ const PRESET_OPTIONS: { label: string; value: TimelinePresetRange; description: 
   { label: "今年", value: "1y", description: "呈现今年发布的模型" },
 ];
 
+// 与后端 /api/timeline 的 year 约束保持一致：Query(None, ge=1900, le=3000)（闭区间）
+const YEAR_MIN = 1900;
+const YEAR_MAX = 3000;
+
 const OPEN_SOURCE_OPTIONS: { label: string; value: "all" | "open" | "closed"; description: string }[] = [
   { label: "全部", value: "all", description: "查看全部模型" },
   { label: "开源", value: "open", description: "仅查看开源模型" },
@@ -53,18 +57,33 @@ const FilterContent = ({
   providerSelectId: string;
   modelSearchId: string;
 }) => {
+  // 年份输入用受控草稿值：输入过程中不被外部值打断，只在 customYear 真正变化时同步；
+  // 「清除」按钮同时清空草稿，避免「筛选状态已清空、输入框还留着旧值」（ISSUE-012）。
+  const [yearDraft, setYearDraft] = useState<string>(customYear != null ? String(customYear) : "");
+  const [yearError, setYearError] = useState<string | null>(null);
+  const yearErrorId = `${inputId}-year-error`;
+
+  useEffect(() => {
+    setYearDraft(customYear != null ? String(customYear) : "");
+    setYearError(null);
+  }, [customYear]);
+
   const handleCustomSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const yearValue = formData.get("year")?.toString();
+    const yearValue = yearDraft.trim();
     if (!yearValue) {
+      setYearError(null);
       onCustomYearChange(null);
       return;
     }
-    const year = Number.parseInt(yearValue, 10);
-    if (!Number.isNaN(year) && year > 1900 && year < 3000) {
-      onCustomYearChange(year);
+    // 闭区间与后端一致（ge=1900, le=3000）；非法值就地提示，不再静默丢弃（ISSUE-013）
+    const year = Number(yearValue);
+    if (!Number.isInteger(year) || year < YEAR_MIN || year > YEAR_MAX) {
+      setYearError(`请输入 ${YEAR_MIN}–${YEAR_MAX} 之间的年份`);
+      return;
     }
+    setYearError(null);
+    onCustomYearChange(year);
   };
 
   const handleTagKeyPress = (event: KeyboardEvent<HTMLSpanElement>, action: () => void) => {
@@ -107,7 +126,13 @@ const FilterContent = ({
             name="year"
             type="number"
             placeholder="例如 2024"
-            defaultValue={customYear ?? ""}
+            value={yearDraft}
+            onChange={(event) => {
+              setYearDraft(event.target.value);
+              setYearError(null);
+            }}
+            aria-invalid={yearError ? true : undefined}
+            aria-describedby={yearError ? yearErrorId : undefined}
             className="flex-1 rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none"
           />
           <div className="flex gap-2">
@@ -120,7 +145,11 @@ const FilterContent = ({
             {customYear ? (
               <button
                 type="button"
-                onClick={() => onCustomYearChange(null)}
+                onClick={() => {
+                  setYearDraft("");
+                  setYearError(null);
+                  onCustomYearChange(null);
+                }}
                 className="text-xs text-text-muted hover:text-text-primary"
               >
                 清除
@@ -128,6 +157,11 @@ const FilterContent = ({
             ) : null}
           </div>
         </form>
+        {yearError ? (
+          <p id={yearErrorId} className="text-xs text-rose-400">
+            {yearError}
+          </p>
+        ) : null}
       </div>
 
       {providers.length > 0 ? (

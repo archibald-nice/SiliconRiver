@@ -164,6 +164,17 @@ export const fetchTimeline = async (params: {
 };
 
 /**
+ * 从 axios 错误里取出 HTTP 状态码，供调用方区分「业务上的空状态」与真正的失败。
+ * axios reject 时已经保留了 `error.response.status`，因此不需要重新包装错误对象。
+ */
+export const getApiErrorStatus = (error: unknown): number | undefined => {
+  if (axios.isAxiosError(error)) {
+    return error.response?.status;
+  }
+  return undefined;
+};
+
+/**
  * 获取单个模型的AI分析结果。
  * @param modelId 模型ID (格式: provider/model_name)
  */

@@ -13,10 +13,11 @@ const Footer = () => {
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
+  // 如实描述实际数据管线：daily_sync.sh 每日 12:00（Asia/Shanghai）跑一轮同步（ISSUE-029）。
+  // 曾经写的「开源每 1 小时 / 闭源每 6 小时」没有任何定时任务在兑现。
   const tags = [
     "本网站获取信息来源：HuggingFace、OpenRouter",
-    "开源模型拉取频率：每 1 小时",
-    "闭源模型拉取频率：每 6 小时",
+    "开源 / 闭源模型：每日 12:00（北京时间）同步一次",
   ];
 
   return (

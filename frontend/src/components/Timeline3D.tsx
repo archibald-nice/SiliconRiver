@@ -186,8 +186,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
       return hint;
     };
 
-    const prevHintLabel = createHint("Next...");
-    const nextHintLabel = createHint("Prev...");
+    const prevHintLabel = createHint("上一个");
+    const nextHintLabel = createHint("下一个");
     container.appendChild(nextHintLabel);
     container.appendChild(prevHintLabel);
 
@@ -209,7 +209,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     const nearestButton = document.createElement("button");
     nearestButton.className =
       "absolute right-3 top-3 z-20 rounded-md border border-blue-700 bg-blue-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-blue-800";
-    nearestButton.textContent = "Nearest";
+    nearestButton.textContent = "最近";
     nearestButton.style.position = "absolute";
     nearestButton.style.right = "12px";
     nearestButton.style.top = "12px";

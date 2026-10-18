@@ -1,7 +1,7 @@
 import { Dialog, Transition } from "@headlessui/react";
 import { Fragment, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchModelAnalysis, buildProviderAvatarUrl } from "../api/client";
+import { fetchModelAnalysis, buildProviderAvatarUrl, getApiErrorStatus } from "../api/client";
 
 interface ModelAnalysisModalProps {
   isOpen: boolean;
@@ -15,7 +15,15 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProp
     queryKey: ["model-analysis", modelId],
     queryFn: () => fetchModelAnalysis(modelId),
     enabled: isOpen && !!modelId,
+    // 404 不重试：默认策略会退避重试 3 次（1s+2s+4s），对「没有分析记录」这种确定性结果
+    // 只是让用户白等 7 秒才看到提示（ISSUE-015）。
+    retry: (failureCount, queryError) =>
+      getApiErrorStatus(queryError) !== 404 && failureCount < 3,
   });
+
+  // 404 = 该模型还没有分析记录，是正常状态（重试也不会成功）；其他状态码/网络错误才算失败。
+  // 两种情况不能共用一句文案，否则用户会按「请重试」反复点到同一个 404（ISSUE-015）。
+  const isAnalysisMissing = getApiErrorStatus(error) === 404;
 
   // 添加自定义滚动条样式到 DOM
   useEffect(() => {
@@ -97,10 +105,14 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProp
                   </div>
                 )}
 
-                {/* 错误状态 */}
+                {/* 错误状态：404（暂无分析结果）是正常状态，不引导重试；其余错误才提示重试 */}
                 {error && (
                   <div className="flex items-center justify-center py-12">
-                    <p className="text-rose-400">加载分析数据失败，请重试</p>
+                    {isAnalysisMissing ? (
+                      <p className="text-text-muted">该模型暂无分析结果，分析任务每日 12:30 运行</p>
+                    ) : (
+                      <p className="text-rose-400">加载分析数据失败，请重试</p>
+                    )}
                   </div>
                 )}
 
@@ -266,8 +278,12 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId }: ModelAnalysisModalProp
                                 </span>
                               </div>
                             </div>
+                            {/* ISSUE-008：行业评分没有数据源——后端 model_arena_info 既没有自动写入
+                                （落库是空壳 TODO、零调用方，见 AGENTS.md 踩坑 4.4），前端也从未接评分接口。
+                                原先固定显示「评分数据加载中…」会让人以为在等一个永远不来的请求，
+                                故改为如实说明暂无数据；等后端有了真实数据源再接接口。 */}
                             <p className="text-xs text-text-muted text-center py-2">
-                              📊 评分数据加载中...
+                              暂无可用的评分数据
                             </p>
                           </div>
                         </div>
