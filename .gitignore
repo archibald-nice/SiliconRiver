@@ -13,7 +13,9 @@ __pycache__/
 !*/.env.example
 
 # Data artefacts
-/data/
+/data/*
+# 例外：厂商 logo 映射表是人工维护的**来源清单**（代码级资产），不是抓取产物，必须进仓库
+!/data/provider_logos.yaml
 *.db
 # scripts/daily_sync.sh 的日志落盘目录，不应提交
 logs/

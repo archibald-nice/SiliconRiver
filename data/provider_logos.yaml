@@ -1,0 +1,458 @@
+# 厂商头像来源映射表（provider_id 与 models.provider / providers.provider_id 完全一致，区分大小写）
+#
+# 来源优先级固定为：LobeHub SVG → LobeHub PNG → GitHub org 头像 → Google favicon。
+# 理由见 /tmp/logo-sources-report.md 与 src/scraper/provider_logos.py 的模块注释。
+#
+# 字段（除 provider 外都可省略）：
+#   provider      必填，与数据库里的 provider_id 逐字符一致
+#   display_name  可选，写进 providers.display_name（省略则保留库里已有的名字）
+#   lobe_slug     LobeHub 图标 slug；不确定就留空，空值会自动落到下一级来源
+#   github_org    GitHub 组织名；**撞名的不要填**（填了就会抓到别家公司的头像）
+#   domain        兜底 favicon 用；没有可信域名就留空
+#   enabled       false = 明确不下载（真人头像 / 三源都查不到），脚本直接跳过
+#   note          给人看的说明，脚本不解析
+#
+# 维护提示：新增厂商先查 LobeHub（https://lobehub.com/icons）有没有方形品牌图标，
+# 没有再填 GitHub org，并且必须点开确认这个 org 真的是这家公司——GitHub 上撞名比
+# 想象的多（本表已踩到 perceptron / typesafehub / aionlabs 三个）。
+
+- provider: "google"
+  display_name: "Google"
+  lobe_slug: "google"
+  github_org: "google"
+  domain: "google.com"
+  enabled: true
+  note: "三源齐全"
+
+- provider: "microsoft"
+  display_name: "Microsoft"
+  lobe_slug: "microsoft"
+  github_org: "microsoft"
+  domain: "microsoft.com"
+  enabled: true
+  note: "Simple Icons 里没有 microsoft，别再按名字猜 simpleicons"
+
+- provider: "Qwen"
+  display_name: "Qwen"
+  lobe_slug: "qwen"
+  github_org: "Qwen"
+  domain: "qwen.ai"
+  enabled: true
+  note: "HF 侧大写 org，和下面的 qwen 是同一家公司、各占一行"
+
+- provider: "tencent"
+  display_name: "Tencent"
+  lobe_slug: "tencent"
+  github_org: "Tencent"
+  domain: "tencent.com"
+  enabled: true
+  note: ""
+
+- provider: "zai-org"
+  display_name: "Z.ai"
+  lobe_slug: "zai"
+  github_org: "zai-org"
+  domain: "z.ai"
+  enabled: true
+  note: "智谱的 HF org；与 z.ai 同品牌，图标复用"
+
+- provider: "openai"
+  display_name: "OpenAI"
+  lobe_slug: "openai"
+  github_org: "openai"
+  domain: "openai.com"
+  enabled: true
+  note: ""
+
+- provider: "deepseek-ai"
+  display_name: "DeepSeek"
+  lobe_slug: "deepseek"
+  github_org: "deepseek-ai"
+  domain: "deepseek.com"
+  enabled: true
+  note: ""
+
+- provider: "mistralai"
+  display_name: "Mistral AI"
+  lobe_slug: "mistral"
+  github_org: "mistralai"
+  domain: "mistral.ai"
+  enabled: true
+  note: ""
+
+- provider: "meta-llama"
+  display_name: "Meta"
+  lobe_slug: "meta"
+  github_org: "meta-llama"
+  domain: "meta.com"
+  enabled: true
+  note: ""
+
+- provider: "qwen"
+  display_name: "Qwen"
+  lobe_slug: "qwen"
+  github_org: "Qwen"
+  domain: "qwen.ai"
+  enabled: true
+  note: "OpenRouter 侧小写 key，与 Qwen 是同一品牌"
+
+- provider: "anthropic"
+  display_name: "Anthropic"
+  lobe_slug: "anthropic"
+  github_org: "anthropics"
+  domain: "anthropic.com"
+  enabled: true
+  note: "GitHub org 是复数 anthropics"
+
+- provider: "01-ai"
+  display_name: "01.AI"
+  lobe_slug: ""
+  github_org: "01-ai"
+  domain: "01.ai"
+  enabled: true
+  note: "LobeHub 未收录；GitHub org 实测 200"
+
+- provider: "baichuan-inc"
+  display_name: "Baichuan"
+  lobe_slug: "baichuan"
+  github_org: "baichuan-inc"
+  domain: "baichuan-ai.com"
+  enabled: true
+  note: ""
+
+- provider: "mistral"
+  display_name: "Mistral AI"
+  lobe_slug: "mistral"
+  github_org: "mistralai"
+  domain: "mistral.ai"
+  enabled: true
+  note: "OpenRouter 侧 key，与 mistralai 同品牌"
+
+- provider: "z.ai"
+  display_name: "Z.ai"
+  lobe_slug: "zai"
+  github_org: "zai-org"
+  domain: "z.ai"
+  enabled: true
+  note: "OpenRouter 侧 key，与 zai-org 同品牌"
+
+- provider: "deepseek"
+  display_name: "DeepSeek"
+  lobe_slug: "deepseek"
+  github_org: "deepseek-ai"
+  domain: "deepseek.com"
+  enabled: true
+  note: "OpenRouter 侧 key，与 deepseek-ai 同品牌"
+
+- provider: "meta"
+  display_name: "Meta"
+  lobe_slug: "meta"
+  github_org: "meta-llama"
+  domain: "meta.com"
+  enabled: true
+  note: "OpenRouter 侧 key，与 meta-llama 同品牌"
+
+- provider: "nvidia"
+  display_name: "NVIDIA"
+  lobe_slug: "nvidia"
+  github_org: "NVIDIA"
+  domain: "nvidia.com"
+  enabled: true
+  note: "GitHub org 大小写敏感，是 NVIDIA"
+
+- provider: "moonshotai"
+  display_name: "Moonshot AI"
+  lobe_slug: "moonshot"
+  github_org: "MoonshotAI"
+  domain: "moonshot.cn"
+  enabled: true
+  note: ""
+
+- provider: "minimax"
+  display_name: "MiniMax"
+  lobe_slug: "minimax"
+  github_org: "MiniMax-AI"
+  domain: "minimax.io"
+  enabled: true
+  note: ""
+
+- provider: "spacexai"
+  display_name: "xAI"
+  lobe_slug: "xai"
+  github_org: "xai-org"
+  domain: "x.ai"
+  enabled: true
+  note: "provider_key_for() 把 x-ai/xai 都归到 spacexai"
+
+- provider: "cohere"
+  display_name: "Cohere"
+  lobe_slug: "cohere"
+  github_org: "cohere-ai"
+  domain: "cohere.com"
+  enabled: true
+  note: ""
+
+- provider: "aionlabs"
+  display_name: "AionLabs"
+  lobe_slug: "aionlabs"
+  github_org: ""
+  domain: "aionlabs.ai"
+  enabled: true
+  note: "GitHub 撞名：github.com/aionlabs 实测是 Grupo Xiuh，不是这家，绝不能用"
+
+- provider: "bytedance seed"
+  display_name: "ByteDance Seed"
+  lobe_slug: "bytedance"
+  github_org: "bytedance"
+  domain: "bytedance.com"
+  enabled: true
+  note: "Seed 没有独立品牌图标，复用字节跳动母品牌"
+
+- provider: "perplexity"
+  display_name: "Perplexity"
+  lobe_slug: "perplexity"
+  github_org: "perplexityai"
+  domain: "perplexity.ai"
+  enabled: true
+  note: ""
+
+- provider: "amazon"
+  display_name: "Amazon"
+  lobe_slug: "aws"
+  github_org: "aws"
+  domain: "amazon.com"
+  enabled: true
+  note: "LobeHub/GitHub 只有 AWS 图标（云服务品牌，非母品牌 Amazon）"
+
+- provider: "xiaomi"
+  display_name: "Xiaomi"
+  lobe_slug: "xiaomimimo"
+  github_org: "XiaomiMiMo"
+  domain: "xiaomi.com"
+  enabled: true
+  note: "LobeHub 收录的是 MiMo 子品牌图标"
+
+- provider: "thinking machines"
+  display_name: "Thinking Machines"
+  lobe_slug: ""
+  github_org: "thinking-machines-lab"
+  domain: "thinkingmachines.ai"
+  enabled: true
+  note: "LobeHub 未收录；靠 GitHub org"
+
+- provider: "sakana"
+  display_name: "Sakana AI"
+  lobe_slug: "sakana"
+  github_org: "SakanaAI"
+  domain: "sakana.ai"
+  enabled: true
+  note: ""
+
+- provider: "poolside"
+  display_name: "Poolside"
+  lobe_slug: "poolside"
+  github_org: "poolside"
+  domain: "poolside.ai"
+  enabled: true
+  note: ""
+
+- provider: "sao10k"
+  display_name: "Sao10K"
+  lobe_slug: ""
+  github_org: "Sao10K"
+  domain: ""
+  enabled: true
+  note: "社区组织，无独立域名；只有 GitHub 头像可用"
+
+- provider: "stepfun"
+  display_name: "StepFun"
+  lobe_slug: "stepfun"
+  github_org: "stepfun-ai"
+  domain: "stepfun.com"
+  enabled: true
+  note: ""
+
+- provider: "inclusionai"
+  display_name: "InclusionAI"
+  lobe_slug: ""
+  github_org: "inclusionAI"
+  domain: "inclusionai.org"
+  enabled: true
+  note: "LobeHub 未收录"
+
+- provider: "thedrummer"
+  display_name: "TheDrummer"
+  lobe_slug: ""
+  github_org: "TheDrummer"
+  domain: ""
+  enabled: false
+  note: "GitHub 头像是真人照片，视觉上不是厂商 logo，明确不下载、保留现有占位"
+
+- provider: "upstage"
+  display_name: "Upstage"
+  lobe_slug: "upstage"
+  github_org: "upstage"
+  domain: "upstage.ai"
+  enabled: true
+  note: ""
+
+- provider: "nous"
+  display_name: "Nous Research"
+  lobe_slug: "nousresearch"
+  github_org: "NousResearch"
+  domain: "nousresearch.com"
+  enabled: true
+  note: ""
+
+- provider: "morph"
+  display_name: "Morph"
+  lobe_slug: "morph"
+  github_org: "morph"
+  domain: "morphllm.com"
+  enabled: true
+  note: "GitHub org 身份未人工确认；命中顺序上 LobeHub 优先，GitHub 只做兜底"
+
+- provider: "nex agi"
+  display_name: "Nex AGI"
+  lobe_slug: ""
+  github_org: ""
+  domain: "nex-agi.com"
+  enabled: false
+  note: "三源都查不到可靠图标（域名能解析但 favicon 只返回默认地球图），需人工挑图"
+
+- provider: "liquidai"
+  display_name: "Liquid AI"
+  lobe_slug: "liquid"
+  github_org: "Liquid4All"
+  domain: "liquid.ai"
+  enabled: true
+  note: ""
+
+- provider: "perceptron"
+  display_name: "Perceptron"
+  lobe_slug: "perceptron"
+  github_org: ""
+  domain: ""
+  enabled: true
+  note: "GitHub 撞名：github.com/perceptron 是个人账号（Udayan Umapathi），只信 LobeHub"
+
+- provider: "inference.net"
+  display_name: "Inference.net"
+  lobe_slug: "inference"
+  github_org: ""
+  domain: "inference.net"
+  enabled: true
+  note: "LobeHub 有 inference 图标，但与 inference.net 的品牌对应关系待人工确认"
+
+- provider: "inception"
+  display_name: "Inception"
+  lobe_slug: "inception"
+  github_org: "inceptionai"
+  domain: "inceptionai.ai"
+  enabled: true
+  note: ""
+
+- provider: "relace"
+  display_name: "Relace"
+  lobe_slug: "relace"
+  github_org: "relace"
+  domain: "relace.ai"
+  enabled: true
+  note: "GitHub org 标题为 relace，身份大概率正确但未人工确认"
+
+- provider: "scaledown"
+  display_name: "ScaleDown"
+  lobe_slug: ""
+  github_org: "scaledown"
+  domain: "scaledown.ai"
+  enabled: true
+  note: "LobeHub 未收录；GitHub org 身份未人工确认"
+
+- provider: "ibm"
+  display_name: "IBM"
+  lobe_slug: "ibm"
+  github_org: "ibm"
+  domain: "ibm.com"
+  enabled: true
+  note: "Simple Icons 里 ibm 是 404"
+
+- provider: "fireworks"
+  display_name: "Fireworks AI"
+  lobe_slug: "fireworks"
+  github_org: "fireworks-ai"
+  domain: "fireworks.ai"
+  enabled: true
+  note: ""
+
+- provider: "prismml"
+  display_name: "PrismML"
+  lobe_slug: ""
+  github_org: "prism-ml"
+  domain: "prismml.com"
+  enabled: true
+  note: "LobeHub 未收录；GitHub org 是 prism-ml"
+
+- provider: "typesafe"
+  display_name: "Typesafe"
+  lobe_slug: ""
+  github_org: ""
+  domain: "typesafe.ai"
+  enabled: true
+  note: "GitHub 撞名：github.com/typesafehub 是 Lightbend（Typesafe 存档），不是这家；只能靠 Google favicon"
+
+- provider: "mancer"
+  display_name: "Mancer"
+  lobe_slug: ""
+  github_org: "mancerai"
+  domain: "mancer.tech"
+  enabled: true
+  note: "GitHub org 身份未人工确认；报告提示其头像可能也是真人照片，建议下载后人工复核"
+
+- provider: "venice"
+  display_name: "Venice AI"
+  lobe_slug: "venice"
+  github_org: "veniceai"
+  domain: "venice.ai"
+  enabled: true
+  note: ""
+
+- provider: "writer"
+  display_name: "Writer"
+  lobe_slug: ""
+  github_org: "writer"
+  domain: "writer.com"
+  enabled: true
+  note: "LobeHub 未收录"
+
+- provider: "arcee ai"
+  display_name: "Arcee AI"
+  lobe_slug: "arcee"
+  github_org: "Arcee-AI"
+  domain: "arcee.ai"
+  enabled: true
+  note: ""
+
+- provider: "bytedance"
+  display_name: "ByteDance"
+  lobe_slug: "bytedance"
+  github_org: "bytedance"
+  domain: "bytedance.com"
+  enabled: true
+  note: "Google favicon 对该域名返回默认地球图，命中后会靠状态码/体积过滤"
+
+- provider: "meituan"
+  display_name: "Meituan"
+  lobe_slug: ""
+  github_org: "meituan"
+  domain: "meituan.com"
+  enabled: true
+  note: "LobeHub 未收录"
+
+# 说明：报告里另外两家真人头像（gryphe、undi95）当前**不在**数据库的 54 个
+# provider 里，所以没有为它们建行。将来若新模型把它们带进 providers 表，按下面
+# 格式补一行 enabled: false 即可（resolve_logo_sources 会直接返回空，保留中性占位）：
+#
+# - provider: "gryphe"
+#   github_org: "gryphe"
+#   enabled: false
+#   note: "GitHub 头像是真人照片，不是厂商 logo"
