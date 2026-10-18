@@ -17,6 +17,7 @@ from src.analysis.brave_search import BraveSearchClient, BraveSearchError
 from src.analysis.leaderboard_aggregator import LeaderboardAggregator
 from src.analysis.performance_monitor import get_monitor, PerformanceMonitor
 from src.analysis.performance_decorator import monitor_latency
+from src.net_env import sanitize_proxy_environment
 
 LOGGER = logging.getLogger("silicon_river.async_analyzer")
 
@@ -215,6 +216,7 @@ class AsyncModelAnalyzer:
 
     async def __aenter__(self):
         """异步上下文管理器进入。"""
+        sanitize_proxy_environment()
         self.client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.api_url,

@@ -10,6 +10,7 @@ from typing import Optional
 
 from openai import OpenAI, APIError, APIConnectionError, APITimeoutError, RateLimitError
 from dotenv import load_dotenv
+from src.net_env import sanitize_proxy_environment
 
 LOGGER = logging.getLogger("silicon_river.analyzer")
 
@@ -75,6 +76,7 @@ class ModelAnalyzer:
             OpenAI客户端实例或None
         """
         try:
+            sanitize_proxy_environment()
             return OpenAI(
                 api_key=self.api_key,
                 base_url=self.api_url,

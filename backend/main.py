@@ -50,6 +50,17 @@ ENV_PATH = PROJECT_ROOT / ".env"
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH, override=False)
 
+# 代理环境变量的兼容处理（ISSUE-002）：no_proxy 里带 `[::1]` 时 httpx 建 Client 就抛
+# `InvalidURL: Invalid port: ':1]'`，头像回退链路会整条 500。Vercel 部署只带 backend/、
+# 没有 `src/`，那里拿不到这个模块——云端也不会出现本机这套代理变量。
+try:
+    from src.net_env import sanitize_proxy_environment
+except ImportError:  # pragma: no cover - 仅 Vercel（service root=backend/）走到
+    sanitize_proxy_environment = None  # type: ignore[assignment]
+
+if sanitize_proxy_environment is not None:
+    sanitize_proxy_environment()
+
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://USER:PASSWORD@HOST:5432/silicon_river")
 # 数据库连接超时（秒）：数据库不可达时快速失败，不让请求挂到平台超时
 DB_CONNECT_TIMEOUT = float(os.getenv("DB_CONNECT_TIMEOUT", "10"))
