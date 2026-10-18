@@ -111,9 +111,16 @@ class HFLeaderboardClient(LeaderboardClient):
                     LOGGER.warning(f"请求失败（尝试 {attempt}/{self.MAX_RETRIES}）：{e}，将在 {wait_time}s 后重试")
                     await asyncio.sleep(wait_time)
 
-        # 返回模拟数据
-        LOGGER.warning("无法从 API 获取 HF Leaderboard 数据，使用模拟数据")
-        return self._get_mock_leaderboard()
+        # 上游失败就如实失败：返回空列表，绝不允许回落假数据（ISSUE-001 事故）。
+        # 曾经的 _get_mock_leaderboard() 会编造「Llama-2-70b 第 1 名、64.42 分」，
+        # 再喂给 LLM 当事实——这比没有排名危害大得多。
+        LOGGER.warning(
+            "无法从 API 获取 HF Leaderboard 数据（已重试 %d 次）：%s；"
+            "返回空结果，不回落假数据",
+            self.MAX_RETRIES,
+            last_exception,
+        )
+        return []
 
     @staticmethod
     def _parse_hf_response(data: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -140,21 +147,6 @@ class HFLeaderboardClient(LeaderboardClient):
         except Exception as e:
             LOGGER.error(f"解析 HF Leaderboard 数据失败：{e}")
             return None
-
-    @staticmethod
-    def _get_mock_leaderboard() -> list[dict[str, Any]]:
-        """获取模拟排行榜数据。
-
-        Returns:
-            模拟排行榜数据
-        """
-        return [
-            {"Model": "meta-llama/Llama-2-70b-hf", "Rank": 1, "Average": 64.42},
-            {"Model": "openai/gpt-3.5-turbo", "Rank": 2, "Average": 63.75},
-            {"Model": "mistralai/Mistral-7B-v0.1", "Rank": 3, "Average": 61.12},
-            {"Model": "meta-llama/Llama-2-13b-hf", "Rank": 4, "Average": 59.88},
-            {"Model": "togethercomputer/RedPajama-INCITE-7B-Instruct", "Rank": 5, "Average": 58.45},
-        ]
 
     def find_model_rank(
         self,

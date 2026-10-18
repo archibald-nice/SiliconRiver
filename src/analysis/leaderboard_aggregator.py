@@ -19,11 +19,13 @@ LOGGER = logging.getLogger("silicon_river.leaderboard_aggregator")
 #      404 还要各重试 2 次，HF / LMSYS 走 20s 超时），而单个模型的分析预算是
 #      ANALYSIS_TIMEOUT_SECONDS=30s。结果是 LLM 调用还没开始就被 asyncio.wait_for
 #      掐掉，模型一个都分析不出来。
-#   2. 上游挂了会**兜底到写死的假数据**（HF / LMSYS 客户端的 _get_mock_leaderboard），
+#   2. 上游挂了曾**兜底到写死的假数据**（HF / LMSYS 客户端的 _get_mock_leaderboard），
 #      于是每个模型都被塞进"Llama-2 排名第 1、64.42 分"这类编造的排名，
-#      等于拿假事实污染 LLM 的分析结论。
-# 真排行榜数据由 scripts/update_arena_scores.py 单独写进 model_arena_info 表，
-# 不必在逐个模型的分析流程里现抓。需要时把 ENABLE_LEADERBOARD_LOOKUP 设为 true。
+#      等于拿假事实污染 LLM 的分析结论。假数据兜底已在 ISSUE-001 中**删除**：
+#      两个客户端现在失败即返回空列表 + WARNING，不允许回落假数据。
+# 真排行榜数据由 scripts/sync_arena_scores.py 从 LMArena / SWE-bench 抓取后
+# 单独写进 model_arena_info 表，不必在逐个模型的分析流程里现抓。
+# 需要时把 ENABLE_LEADERBOARD_LOOKUP 设为 true。
 ENABLE_LEADERBOARD_LOOKUP = (
     os.getenv("ENABLE_LEADERBOARD_LOOKUP", "false").lower() == "true"
 )

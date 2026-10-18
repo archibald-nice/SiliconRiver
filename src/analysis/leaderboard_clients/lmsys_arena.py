@@ -112,9 +112,16 @@ class LMSYSArenaLeaderboardClient(LeaderboardClient):
                     LOGGER.warning(f"请求失败（尝试 {attempt}/{self.MAX_RETRIES}）：{e}，将在 {wait_time}s 后重试")
                     await asyncio.sleep(wait_time)
 
-        # 如果所有尝试都失败，返回默认数据
-        LOGGER.warning("无法从 API 获取 LMSYS Arena 数据，使用模拟数据")
-        return self._get_mock_leaderboard()
+        # 上游失败就如实失败：返回空列表，绝不允许回落假数据（ISSUE-001 事故）。
+        # 曾经的 _get_mock_leaderboard() 会编造「gpt-4-turbo 第 1 名、1298 分」，
+        # 再喂给 LLM 当事实——虚假排名比缺失排名更糟。
+        LOGGER.warning(
+            "无法从 API 获取 LMSYS Arena 数据（已重试 %d 次）：%s；"
+            "返回空结果，不回落假数据",
+            self.MAX_RETRIES,
+            last_exception,
+        )
+        return []
 
     @staticmethod
     def _parse_dataset_response(data: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -144,21 +151,6 @@ class LMSYSArenaLeaderboardClient(LeaderboardClient):
         except Exception as e:
             LOGGER.error(f"解析 LMSYS Arena 数据失败：{e}")
             return None
-
-    @staticmethod
-    def _get_mock_leaderboard() -> list[dict[str, Any]]:
-        """获取模拟排行榜数据（用于测试和备用）。
-
-        Returns:
-            模拟排行榜数据
-        """
-        return [
-            {"model": "gpt-4-turbo", "rank": 1, "elo": 1298},
-            {"model": "claude-3-opus", "rank": 2, "elo": 1275},
-            {"model": "gemini-pro", "rank": 3, "elo": 1265},
-            {"model": "gpt-4", "rank": 4, "elo": 1260},
-            {"model": "claude-3-sonnet", "rank": 5, "elo": 1245},
-        ]
 
     def find_model_rank(
         self,

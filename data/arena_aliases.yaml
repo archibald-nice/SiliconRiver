@@ -1,0 +1,33 @@
+# 排行榜模型名 → 本仓库 model_id 的人工别名表（可选，优先级最高）。
+#
+# 什么时候需要在这里加一条？
+#   归一化 / 尺寸守卫都配不上的“同一个模型、不同写法”。典型场景：
+#     - 排行榜用了产品名，仓库用代号（"GPT-5 High" → 实际仓库名不同）；
+#     - 排行榜把思考档位写进名字，而仓库只有基础模型；
+#     - 仓库里同一模型有 HF 与 OpenRouter 两份，想只写其中一份。
+#
+# 规则（详见 src/scraper/arena/matcher.py）：
+#   1. key 是排行榜上的名字（原样写，匹配时会做大小写/后缀归一）；
+#   2. value 必须是**已存在**的 model_id；指向不存在的 id 会打 WARNING 并
+#      按未命中处理，不会猜一个相近的 id；
+#   3. 别名优先于归一化匹配，所以它也是“纠正错配”的唯一手段；
+#   4. 归一化后 key 冲突（两个不同的 key 指向不同 model_id）时，该条被忽略。
+#
+# 小节：
+#   shared   —— 两个数据源通用
+#   lmarena  —— 只对 LMArena 生效
+#   swebench —— 只对 SWE-bench 生效
+#
+# 示例（把注释去掉并换成真实存在的 model_id 才会生效）：
+#   shared:
+#     "Claude Opus 4.6 (High)": anthropic/claude-opus-4.6
+#   lmarena:
+#     "claude-4-5-opus": anthropic/claude-opus-4.5
+#   swebench:
+#     "claude-4-sonnet": anthropic/claude-sonnet-4
+
+shared: {}
+
+lmarena: {}
+
+swebench: {}
