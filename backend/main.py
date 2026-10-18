@@ -240,6 +240,39 @@ def get_db():
         yield conn
 
 
+def _resolve_canonical_model_id(conn: psycopg.Connection, model_id: str) -> str:
+    """把「被合并行」解析到合并目标（ISSUE-004 跨源合并）。
+
+    OR 行通过 `models.merged_into` 挂到同一模型的 HF 行后面；详情/评分接口收到
+    任何一侧的 id 都要落到同一个目标上，否则用户点 HF 那张卡看不到 OR 侧的价格与榜单分。
+    """
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT merged_into FROM models WHERE model_id = %s", (model_id,))
+        row = cursor.fetchone()
+    merged_into = row.get("merged_into") if row else None
+    return merged_into or model_id
+
+
+def _model_group_ids(conn: psycopg.Connection, model_id: str) -> List[str]:
+    """返回这「一张卡」覆盖的所有 model_id：合并目标 + 挂在它上面的行。"""
+    canonical = _resolve_canonical_model_id(conn, model_id)
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "SELECT model_id FROM models WHERE merged_into = %s ORDER BY model_id",
+            (canonical,),
+        )
+        merged = [row["model_id"] for row in cursor.fetchall()]
+    return [canonical, *merged]
+
+
+# 跨源合并（ISSUE-004）：列表类接口只显示「自己就是一张卡」的行。
+# 目标行若已被删除（dangling），仍然显示原行——宁可多一张卡，也不要让模型凭空消失。
+VISIBLE_MODEL_SQL = (
+    "({alias}.merged_into IS NULL OR NOT EXISTS "
+    "(SELECT 1 FROM models AS p WHERE p.model_id = {alias}.merged_into))"
+)
+
+
 @app.get("/api/models", response_model=ModelList)
 def list_models(
     response: Response,
@@ -269,6 +302,8 @@ def list_models(
     if search:
         filters.append("(model_name ILIKE %s ESCAPE '\\' OR description ILIKE %s ESCAPE '\\')")
         params.extend([f"%{_escape_like(search)}%", f"%{_escape_like(search)}%"])
+
+    filters.append(VISIBLE_MODEL_SQL.format(alias="models"))
 
     where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
 
@@ -454,6 +489,8 @@ def timeline_models(
     elif open_source is False:
         filters.append("(m.is_open_source = FALSE OR m.is_open_source IS NULL)")
 
+    # 跨源合并（ISSUE-004）：OR 行挂在 HF 行后面，列表只显示合并目标。
+    filters.append(VISIBLE_MODEL_SQL.format(alias="m"))
     where_clause = " AND ".join(filters)
 
     with conn.cursor(row_factory=dict_row) as cursor:
@@ -463,18 +500,26 @@ def timeline_models(
             f"""
             WITH filtered AS (
                 SELECT m.model_id, m.provider, m.model_name, m.description, m.tags,
-                       m.created_at, m.model_card_url, m.is_open_source, m.price,
-                       m.huggingface_rank
+                       m.created_at, m.model_card_url, m.is_open_source,
+                       m.price AS own_price, m.huggingface_rank
                 FROM models AS m
                 WHERE {where_clause}
             )
             SELECT page.*, total.total
             FROM (SELECT COUNT(*) AS total FROM filtered) AS total
             LEFT JOIN (
-                SELECT f.*, p.avatar_url, ma.analysis_summary
+                SELECT f.*, p.avatar_url, ma.analysis_summary,
+                       COALESCE(f.own_price, tw.price) AS price
                 FROM filtered AS f
                 LEFT JOIN providers AS p ON f.provider = p.provider_id
                 LEFT JOIN model_analysis AS ma ON f.model_id = ma.model_id
+                -- 价格通常只在 OR 那一行：从被合并的孪生行里取一份补上
+                LEFT JOIN LATERAL (
+                    SELECT t.price FROM models AS t
+                     WHERE t.merged_into = f.model_id AND t.price IS NOT NULL
+                     ORDER BY t.model_id
+                     LIMIT 1
+                ) AS tw ON TRUE
                 ORDER BY f.created_at {order_clause}
                 LIMIT %s OFFSET %s
             ) AS page ON TRUE
@@ -810,15 +855,18 @@ def _fetch_arena_summary(conn: psycopg.Connection, model_id: str) -> ArenaScoreS
 
     抽成普通函数是为了让两个同步路由共用，不需要在事件循环里 await。
     """
+    # 榜单分可能挂在 OR 行上（arena matcher 按当时能匹配到的 id 写入），
+    # 展示时要把整张卡覆盖的所有 id 一起取（ISSUE-004）。
+    group_ids = _model_group_ids(conn, model_id)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
             SELECT model_id, source, rank, score, category, updated_at
             FROM model_arena_info
-            WHERE model_id = %s
-            ORDER BY source, category
+            WHERE model_id = ANY(%s)
+            ORDER BY updated_at DESC, source, category
             """,
-            (model_id,)
+            (group_ids,)
         )
         rows = cursor.fetchall()
 
@@ -874,13 +922,19 @@ def get_model_analysis_with_scores(
     conn: psycopg.Connection = Depends(get_db),
 ) -> TimelineModelWithAnalysis:
     """获取模型的完整分析数据（包括里程碑信息和评分）。"""
-    model_id = request.model_id
+    # 被合并的 OR 行也能被请求到：先解析到合并目标（ISSUE-004）。
+    model_id = _resolve_canonical_model_id(conn, request.model_id)
     with conn.cursor(row_factory=dict_row) as cursor:
         # 查询基础模型信息
         cursor.execute(
             """
             SELECT m.model_id, m.provider, m.model_name, m.description, m.created_at,
-                   m.model_card_url, m.tags, m.is_open_source, m.price,
+                   m.model_card_url, m.tags, m.is_open_source,
+                   COALESCE(m.price, (
+                       SELECT t.price FROM models AS t
+                        WHERE t.merged_into = m.model_id AND t.price IS NOT NULL
+                        ORDER BY t.model_id LIMIT 1
+                   )) AS price,
                    m.huggingface_rank,
                    ma.analysis_summary, ma.is_milestone, ma.milestone_features
             FROM models m
@@ -965,6 +1019,8 @@ def get_model(model_id: str, conn: psycopg.Connection = Depends(get_db)):
             detail=f"Unknown API path: /api/models/{model_id}",
         )
 
+    # 被合并的 OR 行也能被请求到：先解析到合并目标（ISSUE-004）。
+    model_id = _resolve_canonical_model_id(conn, model_id)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """

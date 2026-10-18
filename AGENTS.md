@@ -121,7 +121,7 @@ bash scripts/daily_sync.sh [--dry-run]                       # 每日同步编�
 .venv/bin/python scripts/check_supabase.py                   # 体检（只读，可安全贴输出）
 ```
 
-测试基线：`461 passed`，约 22 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
+测试基线：`465 passed`，约 22 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
 async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此前 33 个 async 用例一直是被跳过的，
 "全绿"并不覆盖它们。**测试不许依赖真实网络**：mock 漏一个客户端就会变成 70 秒超时 + 回落假数据，
 既慢又不稳定。详解见 ARCHITECTURE.md 第 8 节。
@@ -180,6 +180,15 @@ async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此�
   改完要抽查新增行：`pipeline_tag` 不是目标任务的应当删掉并记档。
 - 同一类陷阱：`ON CONFLICT DO UPDATE` 里别覆盖 `created_at`/`inserted_at` 这类时间列
   （ISSUE-035：一次日常抓取把「首次入库时间」全改成了当天，1411 个新增被数成 1976）。
+
+### 4.8 事务里的「打印」能把整批写入悄悄回滚
+
+- 现象：回填脚本打印「已写入: 71 行」，退出码 0，但库里 `merged_into` 非空行数是 **0**。
+- 根因：连接用了 `row_factory=dict_row`，写入后的复核语句写成 `cur.fetchone()[0]`
+  → `KeyError: 0` → 异常抛出 → `with psycopg.connect(...)` 退出时**整体回滚**，
+  而屏幕上「已写入」早几行就打印完了。
+- 铁律：**写完先 `commit()` 再打印/复核**；复核用新连接；「计划非空但复核为 0」要非 0 退出。
+  同类坑：日志/统计代码不要留在事务里，它们抛异常等于悄悄撤销所有写入。
 
 ---
 

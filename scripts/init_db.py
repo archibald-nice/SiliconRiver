@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS models (
 	-- 历史行在 scripts/migrate_add_model_source.py 回填之前一律是 'unknown'；
 	-- 手写 INSERT 省略该列时也落到 'unknown'（默认值就是为此留的，不要去掉）。
 	source text NOT NULL DEFAULT 'unknown',
+	-- 跨源合并（ISSUE-004）：同一模型在 HF / OpenRouter 各一行时，
+	-- OpenRouter 那行写 HF 行的 model_id；列表与详情接口不再单独显示它。
+	-- NULL = 自己就是时间轴上的一张卡。回填见 scripts/backfill_merged_into.py。
+	merged_into text NULL,
 	CONSTRAINT models_model_id_key UNIQUE (model_id),
 	CONSTRAINT models_pkey PRIMARY KEY (id)
 );

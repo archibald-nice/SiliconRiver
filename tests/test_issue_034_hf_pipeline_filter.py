@@ -277,7 +277,10 @@ def test_openrouter_write_sets_source():
     sql, params = _last_model_upsert(conn.cursor_obj)
     assert "source" in sql.split("VALUES")[0]
     assert "source = COALESCE(NULLIF(models.source, 'unknown'), EXCLUDED.source)" in sql
-    assert params[-1] == "openrouter"
+    # 参数尾部依次是：source、hf_model_id、hf_model_id、target_id（ISSUE-004 合并用）
+    assert params[-4] == "openrouter"
+    assert "merged_into" in sql.split("VALUES", 1)[0]
+    assert "merged_into = EXCLUDED.merged_into" in sql
 
 
 def test_source_constants_match_schema_value_domain():

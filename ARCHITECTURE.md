@@ -73,10 +73,17 @@ flowchart LR
 `description`(text) / `tags`(text, JSON 字符串) / `created_at`(timestamptz) /
 `downloads`(bigint) / `likes`(bigint) / `model_card_url`(text) /
 `inserted_at`(timestamptz, 默认 `CURRENT_TIMESTAMP`) / `is_open_source`(boolean) /
-`price`(jsonb) / `huggingface_rank`(int) / `source`(text, 默认 `unknown`)
+`price`(jsonb) / `huggingface_rank`(int) / `source`(text, 默认 `unknown`) /
+`merged_into`(text NULL, 指向同模型的另一行)
 
 - `model_id` 形如 `provider/name`，**含斜杠**（影响 API 路由设计，见第 3 节）。
 - `created_at` 对 HF 是 HF 记录的发布时间；对 OpenRouter 是 API 的 `created` 时间戳。
+- `merged_into` 是**跨源合并**的指针（ISSUE-004 收尾）：OpenRouter 行指向同一模型的
+  HF 行（依据 OR API 的 `hugging_face_id`），于是同模型在时间轴上只出现一张卡；
+  `NULL` 或指向已删除行（dangling）时仍然显示自己。
+  列表类接口用 `VISIBLE_MODEL_SQL` 过滤，价格从被合并行借用——
+  详情/评分接口收到任一 id 都会解析到合并目标（`_resolve_canonical_model_id`）。
+  不要手工 DELETE 被合并行：`price` / 榜单分只在 OR 行上。
 - `source` 记录数据血缘（ISSUE-004）：`huggingface` / `openrouter` / `unknown`。
   写入端按**首个已知来源**获胜（`COALESCE(NULLIF(models.source,'unknown'), EXCLUDED.source)`），
   所以一条 HF 与 OpenRouter 都写过的行，`source` 停在先写的那一侧，不会随每日同步翻转。
@@ -421,7 +428,7 @@ interface ITimelineMode {
 .venv/bin/python -m pytest tests/ -q
 ```
 
-当前基线：`461 passed`，约 22 秒。
+当前基线：`465 passed`，约 22 秒。
 
 - 2026-10-18 之前是 `148 passed, 33 skipped`：`async def` 用例因为 venv 里没有
   `pytest-asyncio` 只发出 `PytestUnhandledCoroutineWarning` 然后被跳过，**从未真正执行过**。

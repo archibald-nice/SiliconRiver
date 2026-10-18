@@ -100,6 +100,9 @@ class ModelRecord:
     price: Optional[Dict[str, object]]
     is_open_source: Optional[bool]
     huggingface_rank: Optional[int]
+    # 该模型在 Hugging Face 上的 model_id（OpenRouter 的 hugging_face_id）。
+    # ISSUE-004 跨源合并：有值时把这一行并入 HF 那一行（merged_into）。
+    hf_model_id: Optional[str] = None
 
 
 def load_config() -> None:
@@ -225,6 +228,14 @@ def provider_key_for(raw: dict) -> str:
     return extract_provider(name, model_id or None)
 
 
+def _clean_hf_id(raw: dict) -> Optional[str]:
+    """取 OpenRouter 条目里的 ``hugging_face_id``（没有/空串/非字符串都返回 None）。"""
+    value = raw.get("hugging_face_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def infer_is_open_source(raw: dict) -> bool:
     """判断 OpenRouter 上这条记录是不是开放权重模型（ISSUE-036）。
 
@@ -238,8 +249,7 @@ def infer_is_open_source(raw: dict) -> bool:
     ``:free`` 是**计费**属性，不是权重属性，不能当开源证据（16 个 :free 里 15 个
     另有 hf_id，剩下那个也就不必靠猜）。
     """
-    hf_id = raw.get("hugging_face_id")
-    return bool(isinstance(hf_id, str) and hf_id.strip())
+    return _clean_hf_id(raw) is not None
 
 
 def to_record(raw: dict) -> ModelRecord:
@@ -267,6 +277,7 @@ def to_record(raw: dict) -> ModelRecord:
         price=price_payload,
         is_open_source=is_open_source,
         huggingface_rank=None,
+        hf_model_id=_clean_hf_id(raw),
     )
 
 
@@ -284,22 +295,41 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                 INSERT INTO models (
                     model_id, provider, model_name, description, tags,
                     created_at, downloads, likes, model_card_url, inserted_at,
-                    price, is_open_source, huggingface_rank, source
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    price, is_open_source, huggingface_rank, source, merged_into
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    -- 跨源合并（ISSUE-004）：该模型在 HF 上已有行时，把这一行挂到那一行后面。
+                    -- 子查询用 lower() 匹配，容忍 `qwen/…` 与 `Qwen/…` 的大小写差异；
+                    -- 排除自己，避免 id 与 hf_id 相同时把自己并给自己。
+                    CASE WHEN %s::text IS NULL THEN NULL
+                         ELSE (SELECT t.model_id FROM models AS t
+                                WHERE lower(t.model_id) = lower(%s)
+                                  AND lower(t.model_id) <> lower(%s)
+                                LIMIT 1)
+                    END
+                )
                 ON CONFLICT (model_id) DO UPDATE SET
                     provider = CASE
                         WHEN lower(models.provider) = lower(EXCLUDED.provider) THEN models.provider
                         ELSE EXCLUDED.provider
                     END,
                     model_name = EXCLUDED.model_name,
-                    description = EXCLUDED.description,
-                    tags = EXCLUDED.tags,
-                    created_at = EXCLUDED.created_at,
+                    -- OpenRouter 不提供简介/标签（description 恒空、tags 恒 []）：
+                    -- 大小写归一后会写进 HF 那一行，这里必须「空值不覆盖」，
+                    -- 否则每天凌晨的 OR 同步都会把 HF 的简介与 license 标签清空。
+                    description = CASE
+                        WHEN COALESCE(EXCLUDED.description, '') = '' THEN models.description
+                        ELSE EXCLUDED.description
+                    END,
+                    tags = CASE WHEN EXCLUDED.tags = '[]' THEN models.tags ELSE EXCLUDED.tags END,
+                    -- 发布时间同理：HF 的是仓库发布日，不能被 OR 的 created 覆盖，否则时间轴上的点会跳。
+                    created_at = COALESCE(models.created_at, EXCLUDED.created_at),
                     model_card_url = EXCLUDED.model_card_url,
                     -- inserted_at 记首次入库，不随更新改写（ISSUE-035）
                     price = COALESCE(EXCLUDED.price, models.price),
                     is_open_source = EXCLUDED.is_open_source,
                     huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank),
+                    merged_into = EXCLUDED.merged_into,
                     -- 来源只认「首个已知值」：跨源合并行（HF 与 OpenRouter 写同一 model_id
                     -- 或大小写归一后落到同一行）不要互相覆盖，否则每日固定「先 HF 后 OR」
                     -- 会让所有合并行的 source 恒为 openrouter，ISSUE-004 判源就失效了。
@@ -321,6 +351,9 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
                     record.is_open_source,
                     record.huggingface_rank,
                     SOURCE_OPENROUTER,
+                    record.hf_model_id,
+                    record.hf_model_id,
+                    target_id,
                 ),
             )
             # 同 fetch_models.py：rowcount 在 ON CONFLICT DO UPDATE 下恒为 1，
