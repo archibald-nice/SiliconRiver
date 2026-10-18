@@ -220,35 +220,42 @@ class TestBraveSearchClientSearchWeb:
                 mock_retry.return_value = []
                 await client.search_web("GPT-4", count=10, freshness="pm")
 
-                # 验证调用参数
+                # 验证调用参数：客户端**不**改写 query（历史版本曾拼
+                # "(release OR announcement OR benchmark OR paper)"，现已移除），
+                # 只负责把 count 限制在 API 上限 20 之内并透传 freshness。
                 mock_retry.assert_called_once()
                 call_args = mock_retry.call_args
-                assert call_args[0][1]["q"] == "GPT-4 (release OR announcement OR benchmark OR paper)"
+                assert call_args[0][1]["q"] == "GPT-4"
                 assert call_args[0][1]["count"] == 10
                 assert call_args[0][1]["freshness"] == "pm"
 
     @pytest.mark.asyncio
     async def test_search_max_results_capped(self):
-        """测试搜索结果数量被限制。"""
+        """上游返回 15 条时，`_execute_search` 只保留前 10 条。
+
+        截断发生在响应解析层，不在 `search_web`——所以这里 mock 的是 HTTP 响应而不是
+        `_execute_search` 本身，否则测的是"mock 有没有返回 10 条"。
+        """
         client = BraveSearchClient(api_key="test-key")
+        payload = {
+            "results": [
+                {"title": f"Result {i}", "description": f"Desc {i}", "url": f"http://test{i}.com"}
+                for i in range(15)
+            ]
+        }
 
-        # 模拟返回超过限制的结果
-        mock_results = [
-            {"title": f"Result {i}", "description": f"Desc {i}", "url": f"http://test{i}.com"}
-            for i in range(15)
-        ]
+        mock_response_obj = AsyncMock()
+        mock_response_obj.status = 200
+        mock_response_obj.json = AsyncMock(return_value=payload)
+        mock_response_obj.__aenter__.return_value = mock_response_obj
+        mock_response_obj.__aexit__ = AsyncMock(return_value=False)
 
-        with patch.object(
-            client, "_apply_rate_limit", new_callable=AsyncMock
-        ):
-            with patch.object(
-                client, "_execute_search", new_callable=AsyncMock
-            ) as mock_execute:
-                mock_execute.return_value = mock_results
-                result = await client.search_web("test")
+        with patch("aiohttp.ClientSession.get") as mock_get:
+            mock_get.return_value.__aenter__.return_value = mock_response_obj
+            mock_get.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = await client._execute_search({"q": "test", "count": 20}, {})
 
-                # 应该限制返回 10 条
-                assert len(result) <= 10
+        assert len(result) == 10
 
     @pytest.mark.asyncio
     async def test_search_exception_handling(self):
@@ -321,7 +328,9 @@ class TestBraveSearchClientExecuteSearch:
             mock_response_obj.__aexit__.return_value = None
 
             mock_get.return_value.__aenter__.return_value = mock_response_obj
-            mock_get.return_value.__aexit__ = AsyncMock()
+            # 返回 False：AsyncMock 默认返回真值，会被 `async with` 当成
+            # "异常已处理" 从而吞掉这次 raise，测试就变成永远不抛
+            mock_get.return_value.__aexit__ = AsyncMock(return_value=False)
 
             with pytest.raises(BraveSearchAuthError):
                 await client._execute_search(
@@ -341,7 +350,7 @@ class TestBraveSearchClientExecuteSearch:
             mock_response_obj.__aexit__.return_value = None
 
             mock_get.return_value.__aenter__.return_value = mock_response_obj
-            mock_get.return_value.__aexit__ = AsyncMock()
+            mock_get.return_value.__aexit__ = AsyncMock(return_value=False)
 
             with pytest.raises(BraveSearchRateLimitError):
                 await client._execute_search(

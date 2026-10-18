@@ -1,6 +1,7 @@
 """排行榜客户端单元测试。"""
 import pytest
 import asyncio
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 import json
 
@@ -174,54 +175,74 @@ class TestLeaderboardAggregator:
             "source": "SWE-bench"
         }
 
-        with patch.object(
-            agg.clients["swe_bench"], "fetch_leaderboard", new_callable=AsyncMock
-        ) as mock_fetch:
-            mock_fetch.return_value = {
-                "bash-only": [
-                    {"model": "gpt-4", "name": "GPT-4", "solve_rate": 85}
-                ]
-            }
+        # 只 mock swe_bench 不够：聚合器会并发查所有 client，其余两个会真的发网络请求
+        # （超时 + 重试 ≈ 70s），再回落到内置样例排名，测试既慢又不稳定。
+        with ExitStack() as stack:
+            for name, client in agg.clients.items():
+                stack.enter_context(
+                    patch.object(
+                        client, "fetch_leaderboard", new_callable=AsyncMock,
+                        return_value=(
+                            {"bash-only": [{"model": "gpt-4", "name": "GPT-4", "solve_rate": 85}]}
+                            if name == "swe_bench" else {}
+                        ),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        client, "find_model_rank",
+                        return_value=mock_rank if name == "swe_bench" else None,
+                    )
+                )
+            result = await agg.get_model_ranks("GPT-4")
 
-            with patch.object(
-                agg.clients["swe_bench"], "find_model_rank", return_value=mock_rank
-            ):
-                result = await agg.get_model_ranks("GPT-4")
-
-                assert len(result) >= 1
-                assert result[0]["rank"] == 1
+        assert len(result) >= 1
+        assert result[0]["rank"] == 1
 
     @pytest.mark.asyncio
     async def test_get_model_ranks_empty(self):
-        """测试未找到排名时返回空列表。"""
+        """所有排行榜都查不到时返回空列表。
+
+        必须把**每个**客户端都 patch 掉：`get_model_ranks` 是并发查全部 client 的，
+        只 mock swe_bench 的话 LMSYS / HF 会真的发网络请求，超时后回落到内置样例
+        排名——测试就会拿到非空结果（历史上就是这么挂的，还白等十几秒）。
+        """
         agg = LeaderboardAggregator(enabled=True)
 
-        with patch.object(
-            agg.clients["swe_bench"], "fetch_leaderboard", new_callable=AsyncMock
-        ) as mock_fetch:
-            mock_fetch.return_value = {"bash-only": []}
+        with ExitStack() as stack:
+            for client in agg.clients.values():
+                stack.enter_context(
+                    patch.object(
+                        client, "fetch_leaderboard", new_callable=AsyncMock,
+                        return_value={},
+                    )
+                )
+                stack.enter_context(
+                    patch.object(client, "find_model_rank", return_value=None)
+                )
+            result = await agg.get_model_ranks("Unknown-Model")
 
-            with patch.object(
-                agg.clients["swe_bench"], "find_model_rank", return_value=None
-            ):
-                result = await agg.get_model_ranks("Unknown-Model")
-
-                assert result == []
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_update_cache(self):
         """测试缓存更新。"""
         agg = LeaderboardAggregator(enabled=True)
 
-        with patch.object(
-            agg.clients["swe_bench"], "fetch_leaderboard", new_callable=AsyncMock
-        ) as mock_fetch:
-            mock_fetch.return_value = {"bash-only": []}
-
+        with ExitStack() as stack:
+            mocked = [
+                stack.enter_context(
+                    patch.object(
+                        client, "fetch_leaderboard", new_callable=AsyncMock,
+                        return_value={"bash-only": []},
+                    )
+                )
+                for client in agg.clients.values()
+            ]
             await agg.update_cache()
 
-            # 应该至少被调用一次
-            mock_fetch.assert_called()
+        # 每个客户端都应该被刷新一次（只 mock 一个会让另外两个真发请求）
+        assert all(mock.called for mock in mocked)
 
     def test_clear_cache_all(self):
         """测试清空所有缓存。"""
@@ -286,29 +307,35 @@ class TestLeaderboardIntegration:
             ]
         }
 
-        with patch.object(
-            agg.clients["swe_bench"], "fetch_leaderboard", new_callable=AsyncMock
-        ) as mock_fetch:
-            mock_fetch.return_value = mock_leaderboard_data
+        def find_side_effect(data, model_name):
+            for category, entries in data.items():
+                for rank, entry in enumerate(entries, 1):
+                    if entry["model"].lower() == model_name.lower():
+                        return {
+                            "rank": rank,
+                            "score": entry["solve_rate"],
+                            "category": category,
+                            "source": "SWE-bench"
+                        }
+            return None
 
-            with patch.object(
-                agg.clients["swe_bench"], "find_model_rank"
-            ) as mock_find:
-                def find_side_effect(data, model_name):
-                    for category, entries in data.items():
-                        for rank, entry in enumerate(entries, 1):
-                            if entry["model"].lower() == model_name.lower():
-                                return {
-                                    "rank": rank,
-                                    "score": entry["solve_rate"],
-                                    "category": category,
-                                    "source": "SWE-bench"
-                                }
-                    return None
+        with ExitStack() as stack:
+            for name, client in agg.clients.items():
+                stack.enter_context(
+                    patch.object(
+                        client, "fetch_leaderboard", new_callable=AsyncMock,
+                        return_value=mock_leaderboard_data if name == "swe_bench" else {},
+                    )
+                )
+                mock_find = stack.enter_context(
+                    patch.object(client, "find_model_rank")
+                )
+                if name == "swe_bench":
+                    mock_find.side_effect = find_side_effect
+                else:
+                    mock_find.return_value = None
 
-                mock_find.side_effect = find_side_effect
+            result = await agg.get_model_ranks("GPT-4")
 
-                result = await agg.get_model_ranks("GPT-4")
-
-                assert len(result) >= 1
-                assert any(r["rank"] == 1 for r in result)
+        assert len(result) >= 1
+        assert any(r["rank"] == 1 for r in result)
