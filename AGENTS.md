@@ -110,8 +110,10 @@ bash scripts/daily_sync.sh [--dry-run]                       # 每日同步编�
 .venv/bin/python scripts/check_supabase.py                   # 体检（只读，可安全贴输出）
 ```
 
-测试基线：`148 passed, 33 skipped`——33 个 skipped 是 async 用例（venv 无 `pytest-asyncio`），
-**从未真正执行过**，别把绿灯当全覆盖。详解见 ARCHITECTURE.md 第 8 节。
+测试基线：`247 passed`，约 20 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
+async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此前 33 个 async 用例一直是被跳过的，
+"全绿"并不覆盖它们。**测试不许依赖真实网络**：mock 漏一个客户端就会变成 70 秒超时 + 回落假数据，
+既慢又不稳定。详解见 ARCHITECTURE.md 第 8 节。
 抓取/分析命令全集见 ARCHITECTURE.md 第 5 节。
 
 **验证按需**：改前端就跑 `npm run build`（含 tsc）；改后端就跑对应的 `pytest tests/<file>`。

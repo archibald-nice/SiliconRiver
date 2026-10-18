@@ -19,3 +19,10 @@
 # 本地开发数据库：自带 PostgreSQL 16 二进制，装在 .venv 内，
 # 不需要 Homebrew / Docker。启停见 scripts/dev_db.sh
 pgserver==0.1.4
+
+# ---------- 测试工具（只在本地/CI 用，不进生产依赖）----------
+pytest==8.3.3
+pytest-mock==3.12.0
+# 0.26 是最后一个支持 pytest<9 的 0.x 线，与上面的 pytest 8.3.3 兼容；
+# 1.x 要求 pytest>=8.4，升级 pytest 时再一起升。
+pytest-asyncio==0.26.0

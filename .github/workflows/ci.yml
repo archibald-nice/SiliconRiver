@@ -1,0 +1,89 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests (pytest + PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: silicon
+          POSTGRES_PASSWORD: silicon
+          POSTGRES_DB: silicon_river_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U silicon -d silicon_river_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # conftest.py refuses to truncate a database whose name does not contain "test".
+      TEST_DATABASE_URL: postgresql://silicon:silicon@localhost:5432/silicon_river_test
+      DATABASE_URL: postgresql://silicon:silicon@localhost:5432/silicon_river_test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            backend/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Initialize schema
+        run: python scripts/init_db.py
+
+      - name: Run backend tests
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: Frontend build (npm ci + tsc + vite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (includes tsc)
+        run: npm run build

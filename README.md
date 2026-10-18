@@ -2,62 +2,60 @@
 
 > An interactive stream of large-model releases powered by AI-enhanced analysis.
 
-Silicon River ingests public LLM catalogues (Hugging Face, OpenRouter), augments them with **real-time web search** and **multi-leaderboard cross-validation**, applies sophisticated **milestone detection**, and renders an immersive **3D spiral timeline** with rich filtering and tooltips.
+Silicon River ingests public LLM catalogues (Hugging Face, OpenRouter), optionally enriches them with Brave web search and three leaderboard clients, applies a keyword-and-rank **milestone heuristic**, and renders an interactive **3D spiral timeline** with filtering and tooltips.
 
-**🌟 Latest Enhancement (Phase 4, Nov 2025)**: Production-grade performance monitoring, multi-leaderboard integration (SWE-bench, LMSYS Arena, HF Leaderboard), and 4-tier milestone detection strategy.
+**Latest enhancement (Phase 4, Nov 2025)**: in-process performance metrics, optional leaderboard clients (SWE-bench, LMSYS Arena, HF Leaderboard), and four-branch milestone detection. Leaderboard lookups ship **disabled by default** because the upstream endpoints are slow or unreliable, and two of the clients fall back to hard-coded sample data (see [Known gaps](#known-gaps)).
 
-_中文文档请见 [README-zh.md](README-zh.md)。_
+_中文文档请见 [README-zh.md](README-zh.md)._
 
 ## ✨ Highlights
 
 - **Immersive 3D Timeline** – Spiral visualization with smooth camera control; click nodes to lock focus and inspect full model metadata with pricing details.
 
-- **AI-Enhanced Analysis** – Real-time web search (Brave API) + LLM analysis + multi-leaderboard validation for accurate model profiling.
+- **AI-Enhanced Analysis** – Optional Brave Search context plus DeepSeek LLM analysis. Leaderboard enrichment is opt-in and off by default.
 
-- **Smart Milestone Detection** – 4-tier strategy combining keyword analysis, timeline position, and authoritative leaderboard rankings (SWE-bench, LMSYS, HF).
+- **Smart Milestone Detection** – Four-branch heuristic: strong keywords → weak-keyword pairs → timeline position → leaderboard rank (the last branch only fires once arena scores have been imported).
 
 - **Filter-First UX** – Time ranges (30d/6m/1y/all), years, providers, text search, and license filters with instant results and model count display.
 
-- **Reliable Data Pipeline** – Python scrapers with sync logs, PostgreSQL caching, incremental updates, and comprehensive test coverage (75+ test cases).
+- **Data Pipeline** – Python scrapers, Hugging Face sync logs, PostgreSQL storage, incremental jobs, and a 247-case backend test suite (see [Testing](#testing)).
 
-- **Production-Ready** – Complete performance monitoring, distributed caching, graceful API degradation, and comprehensive runbooks.
+- **Operational Visibility** – In-process latency/success metrics with text and JSON reports; provider avatar blobs cached in PostgreSQL. No distributed cache or multi-instance metrics aggregation.
 
 ## Architecture
-```text
-                 ┌────────────────────┐
-   Hugging Face  │  Scrapers (Python) │
-   OpenRouter ──▶│  + Sync Log        │
-                 └─────────┬──────────┘
-                           │
-                     PostgreSQL
-                           │
-        ┌──────────────────┴──────────────────┐
-        │                                     │
- FastAPI REST API                  React + Three.js SPA
-  (/api/timeline, etc.)           (Timeline3D, filters)
 
-            ┌─────────────────────────────┐
-            │  AI-Enhanced Analysis       │
-            ├─────────────────────────────┤
-            │ • Brave Search API          │
-            │ • 4 Leaderboard APIs        │
-            │ • DeepSeek LLM Analysis     │
-            │ • 4-Tier Milestone Detection│
-            │ • Performance Monitoring    │
-            └─────────────────────────────┘
+```mermaid
+flowchart LR
+    hf["Hugging Face"] --> scrapers["Python scrapers<br/>(HF jobs write sync_log)"]
+    orx["OpenRouter"] --> scrapers
+    scrapers --> db[("PostgreSQL")]
+    db --> analysis["Optional AI analysis<br/>DeepSeek LLM + Brave Search<br/>+ 3 leaderboard clients (off by default)"]
+    analysis --> db
+    db --> api["FastAPI REST API"]
+    api --> spa["React + Three.js SPA"]
 ```
 
 **Key Components**:
-- **Data Ingestion**: Python scrapers fetch models from Hugging Face and OpenRouter with sync logs for audit trails
-- **Real-time Web Search**: Brave Search API provides latest model announcements and benchmarks
-- **Multi-Leaderboard Validation**: 3 authoritative sources (SWE-bench, LMSYS Arena, HF Leaderboard) verify model capabilities
-- **AI Analysis**: DeepSeek LLM generates rich model descriptions using web context and leaderboard data
-- **Milestone Detection**: 4-tier algorithm (strong keywords → weak keywords → timeline rank → leaderboard rank) identifies pivotal models
-- **Performance Monitoring**: Distributed latency tracking, cache hit metrics, and API success rates ensure production reliability
+- **Data Ingestion**: Python scrapers fetch models from Hugging Face and OpenRouter. Hugging Face jobs write a `sync_log` row per run; the OpenRouter jobs currently do not (known gap).
+- **Real-time Web Search**: Optional Brave Search API context for recent announcements and benchmarks; disabled in `.env.example` until a key is configured.
+- **Leaderboard Enrichment**: Three clients (SWE-bench, LMSYS Arena, HF Leaderboard) exist, but online lookup is disabled by default. `model_arena_info` has no automated writer — scores currently have to be imported with the manual CLI (`scripts/update_arena_scores.py`).
+- **AI Analysis**: DeepSeek LLM generates model descriptions from catalogue data and, when enabled, web/leaderboard context.
+- **Milestone Detection**: Four-branch heuristic (strong keywords → weak-keyword pairs → timeline rank → leaderboard rank) identifies pivotal models; the leaderboard branch is inert until arena data exists.
+- **Observability**: `PerformanceMonitor` keeps a bounded in-process sample window; `performance_reporter` renders text/JSON reports. There is no distributed latency tracking or cache-hit metric.
+
+## Known gaps
+
+These are deliberate, documented limitations, not claims of completeness:
+
+- **Leaderboard lookup is off by default** (`ENABLE_LEADERBOARD_LOOKUP=false`). The three upstream clients can take ~70s combined, far beyond the 30s per-model analysis budget, and the LMSYS/HF clients return hard-coded sample rankings when their upstream fails.
+- **`model_arena_info` is not populated automatically.** The aggregator's `sync_to_database()` is a TODO with no callers; the only write path is the local `scripts/update_arena_scores.py` CLI. Until scores are imported, the arena UI stays empty and the leaderboard milestone branch never fires.
+- **OpenRouter ingestion does not write `sync_log`.** Only the Hugging Face scrapers record runs.
+- **Metrics are per-process.** There is no Redis, no distributed cache, and no aggregation across API instances. `LEADERBOARD_CACHE_TTL` is not read by any code.
+- **The test suite used to hit the real network.** Three leaderboard tests mocked only one of three clients, so the other two attempted live requests, timed out, and fell back to sample data — 206s instead of 0.06s, with order-dependent failures. All clients are mocked now; tests must stay hermetic.
 
 ## Getting Started
 ### Prerequisites
-- Python 3.11+ and Node.js 18+
+- Python 3.11+ (CI uses 3.12) and Node.js 20+
 - PostgreSQL 14+ with a database you can administer
 - (Optional) Hugging Face access token for higher rate limits
 
@@ -68,6 +66,7 @@ python -m venv .venv
 # source .venv/bin/activate         # macOS/Linux
 pip install -r requirements.txt           # scrapers + AI analysis
 pip install -r backend/requirements.txt   # FastAPI service (both are needed locally)
+pip install -r requirements-dev.txt       # optional: test tools + local pgserver
 python scripts/init_db.py           # create tables and indexes
 ```
 
@@ -105,11 +104,15 @@ Set `VITE_API_BASE` in `frontend/.env` (defaults to `http://localhost:8000`).
 | `OPENROUTER_MODELS_URL` | Override endpoint for OpenRouter model listings. |
 | `HF_DAILY_FETCH_LIMIT` / `OPENROUTER_DAILY_FETCH_LIMIT` | Safety limits for incremental jobs. |
 | **AI Enhancement (Phase 4)** | |
+| `DEEPSEEK_API_KEY` | Optional; analysis is skipped when unset. |
+| `DEEPSEEK_API_URL` | DeepSeek base URL (`https://api.deepseek.com/v1`); must not include `/chat/completions`. |
+| `DEEPSEEK_MODEL` | Analysis model (default: `deepseek-chat`). |
+| `ENABLE_POST_SCRAPE_ANALYSIS` | Run analysis at the end of a scrape (default: `false`; prefer the separate analysis job). |
 | `BRAVE_SEARCH_API_KEY` | Brave Search API key for real-time web queries (get from https://api.search.brave.com) |
-| `ENABLE_BRAVE_SEARCH` | Enable/disable Brave Search integration (default: true) |
+| `ENABLE_BRAVE_SEARCH` | Enable/disable Brave Search integration (code default: `true`; `.env.example` ships `false` until a key is set) |
 | `BRAVE_SEARCH_TIMEOUT` | Request timeout in seconds (default: 10) |
 | `BRAVE_SEARCH_MAX_RETRIES` | Retry count on failure (default: 3) |
-| `LEADERBOARD_CACHE_TTL` | Cache duration for leaderboard data in seconds (default: 3600) |
+| `ENABLE_LEADERBOARD_LOOKUP` | Online leaderboard lookup during analysis (default: `false`; see [Known gaps](#known-gaps)) |
 | **Frontend** | |
 | `VITE_API_BASE` | Frontend API target (defaults to `http://localhost:8000`). |
 | **Caching & Performance** | |
@@ -118,7 +121,7 @@ Set `VITE_API_BASE` in `frontend/.env` (defaults to `http://localhost:8000`).
 
 ### Loading Data
 
-Run these scripts whenever you need to refresh the catalogue. Each command respects the configured provider lists and records the run inside `sync_log`. With Brave Search and leaderboard APIs enabled, new models are enriched with real-time context and multi-dimensional validation.
+Run these scripts whenever you need to refresh the catalogue. Hugging Face jobs record each run in `sync_log`; the OpenRouter jobs currently do not. Brave Search and leaderboard enrichment are off unless explicitly enabled.
 
 ```bash
 # Hugging Face (full sync)
@@ -133,14 +136,17 @@ python -m src.scraper.fetch_models_openrouter
 # OpenRouter (daily/partial)
 python -m src.scraper.fetch_models_openrouter_incr_day
 
-# Update leaderboard cache (recommended daily)
+# Warm the in-process leaderboard cache (does not persist; DB sync is still a TODO)
 python scripts/update_leaderboards.py
+
+# Import arena scores manually (the only write path for model_arena_info)
+python scripts/update_arena_scores.py scores.json
 
 # Re-analyze and update existing models (periodically or on demand)
 python -m src.scraper.reanalyze_models --older-than-days 7 --no-confirm
 ```
 
-**Performance**: Single model analysis completes in 10-12 seconds on average (target <15s), with 80-85% leaderboard cache hit rates. Provider avatars are cached inside PostgreSQL; subsequent API calls serve the binary directly or fall back to the upstream URL with size limits (`AVATAR_MAX_BYTES`).
+**Performance**: this repository ships no benchmark results. Per-model latency depends on the LLM and the optional upstream APIs; with leaderboard lookup disabled (the default) no leaderboard cache is involved. Provider avatars are cached inside PostgreSQL; subsequent API calls serve the binary directly or fall back to the upstream URL with size limits (`AVATAR_MAX_BYTES`).
 
 ## API Overview
 | Endpoint | Purpose | Key Parameters |
@@ -159,49 +165,59 @@ All endpoints return JSON and honour CORS for browser clients.
 - Focus bubbles show provider name, release time (localised), open/closed badge, and description; hovering the badge reveals pricing when available.
 - Filter chips and search input update the query immediately without page reloads; the total node count is shown underneath the filters.
 - Provider avatars are prefetched once per session to minimise pop-in when focusing nodes.
-- AI-powered milestone badges highlight pivotal models based on 4-tier detection algorithm combining keyword analysis, timeline position, and authoritative rankings.
+- AI-powered milestone badges highlight pivotal models using the four-branch detection heuristic (keywords, timeline position, and leaderboard rank when available).
 
 ## Testing
 
+Install the development requirements first (they are no longer part of the production requirements):
+
 ```bash
-set TEST_DATABASE_URL=postgresql://user:pass@localhost:5433/silicon_river_test  # Windows
-# export TEST_DATABASE_URL=...                                                 # macOS/Linux
-pytest
+pip install -r requirements-dev.txt
+export TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/silicon_river_test   # macOS/Linux
+# set TEST_DATABASE_URL=...                                                        # Windows
+.venv/bin/python -m pytest tests/ -q
 ```
 
-The test suite (75+ test cases) provisions the schema, truncates it between cases, and exercises ingestion helpers, API endpoints, and the milestone detection algorithm. Tests skip automatically if PostgreSQL or the FastAPI test client is unavailable.
+The backend suite collects **247 cases and takes about 20 seconds** (`247 passed`).
+
+Two history notes, because both caused real confusion:
+
+- Before 2026-10-18 the baseline was `148 passed, 33 skipped`: the `async def` cases were skipped because `pytest-asyncio` was not installed, so they had **never actually run**. Installing it surfaced five stale mocks, now fixed.
+- The suite must not touch the network. Three leaderboard tests used to mock one client out of three, so the rest hit live endpoints, timed out after ~70s each, and fell back to hard-coded sample data (order-dependent failures).
+
+The suite provisions the schema, truncates between cases, and exercises ingestion helpers, API endpoints, and the milestone algorithm. Database-backed tests skip when `TEST_DATABASE_URL` is unset. CI (`.github/workflows/ci.yml`) runs the same suite against a `postgres:16` service plus a frontend `npm ci && npm run build`.
 
 **Coverage includes**:
 - Data scraper transformations (Hugging Face and OpenRouter format parsing)
-- API endpoint validation (timeline filtering, avatar caching, leaderboard queries)
+- API endpoint validation (timeline filtering, avatar caching, arena score queries)
 - Database schema integrity (indexes, constraints, join operations)
-- Milestone detection algorithm (4-tier strategy validation)
-- Performance monitoring and cache behavior
+- Milestone detection algorithm (four-branch strategy validation)
+- Search client behaviour (caching, retries, error paths)
 - Graceful API degradation and error handling
-
-For performance benchmarking, see the results published alongside each release.
 
 ## Project Layout
 
 ```text
 backend/              FastAPI application (uvicorn entrypoint lives here)
 frontend/             React + Vite single-page app (Timeline3D, filters)
-scripts/              Database bootstrap utilities
+scripts/              Database bootstrap and maintenance CLIs
 src/scraper/          Hugging Face and OpenRouter ingestion jobs
 src/analysis/         AI-enhanced analysis (Brave Search, leaderboards, milestone detection)
-tests/                Pytest coverage for scraper + API integration
+tests/                Pytest suite (247 backend cases)
+.github/workflows/    CI (backend pytest + frontend build)
 .env.example          Environment variable template
-requirements.txt      Shared Python dependencies
+requirements.txt      Runtime Python dependencies
+requirements-dev.txt  Test tools + local PostgreSQL (pgserver)
 ```
 
 **Phase 4 Additions**:
 - `src/analysis/brave_search.py` – Brave Search API client with caching and retry logic
 - `src/analysis/async_analyzer.py` – Async model analyzer with real-time context
-- `src/analysis/leaderboard_aggregator.py` – 3 leaderboard APIs with caching and model name normalization
-- `src/analysis/performance_monitor.py` – Distributed latency tracking and statistics
+- `src/analysis/leaderboard_aggregator.py` – 3 leaderboard clients with in-memory caching and model name normalization (disabled unless `ENABLE_LEADERBOARD_LOOKUP=true`)
+- `src/analysis/performance_monitor.py` – In-process latency tracking and statistics (bounded sample window)
 - `src/analysis/performance_reporter.py` – Performance reporting in text and JSON formats
 - `src/scraper/reanalyze_models.py` – Model re-analysis tool (three strategies)
-- `scripts/update_leaderboards.py` – Leaderboard cache maintenance script
+- `scripts/update_leaderboards.py` – Warms the in-process leaderboard cache; does not persist to PostgreSQL
 
 ## License
 MIT License – see [LICENSE](LICENSE).

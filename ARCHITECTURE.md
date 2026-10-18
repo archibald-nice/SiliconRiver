@@ -379,10 +379,15 @@ interface ITimelineMode {
 .venv/bin/python -m pytest tests/ -q
 ```
 
-当前基线：`148 passed, 33 skipped`。
+当前基线：`247 passed`，约 20 秒。
 
-- 33 个 skipped 是 `async def` 测试：venv 里**没有 `pytest-asyncio`**，pytest 警告
-  `PytestUnhandledCoroutineWarning` 并跳过。**这不是回归**，但意味着这些 async 用例
-  **从未真正执行**——新写 async 测试时注意，别以为绿灯就代表覆盖到了
-  （改进计划见 `docs/项目维护改进项.md` M1.2，本地文档）。
+- 2026-10-18 之前是 `148 passed, 33 skipped`：`async def` 用例因为 venv 里没有
+  `pytest-asyncio` 只发出 `PytestUnhandledCoroutineWarning` 然后被跳过，**从未真正执行过**。
+  装上 `pytest-asyncio==0.26.0` 后它们开始真跑，暴露了 5 个过期 mock（已修，见 ISSUE-033）。
+  教训：看到 skip 先问"它为什么 skip"，别把全绿当全覆盖。
+- **测试不许依赖真实网络或外部 API**：`test_leaderboard_clients.py` 里三处只 mock 了
+  `swe_bench`，另外两个客户端会真发请求，超时 + 重试把整个文件拖到 206 秒、还回落到
+  内置样例数据导致断言偶发失败。现在全部客户端都 mock，文件耗时 0.06 秒。
 - 测试库有保护：库名不含 `test` 时 `tests/conftest.py` 会拒绝清表，防止误删。
+- CI 见 `.github/workflows/ci.yml`：backend job 起 `postgres:16` service 跑 pytest，
+  frontend job 跑 `npm ci && npm run build`（build 内含 tsc）。
