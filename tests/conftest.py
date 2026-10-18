@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,6 @@ requires_db = pytest.mark.skipif(
     not TEST_DATABASE_URL,
     reason="需要 TEST_DATABASE_URL（见 .env，本地用 scripts/dev_db.sh start 起库）",
 )
-
 
 # ---------------------------------------------------------------------------
 # 网络守门：默认禁止用例访问真实网络（ISSUE-033）
@@ -136,23 +136,40 @@ def seed_sample_data(db_url: str) -> None:
             VALUES ('acme', 'Acme', NULL), ('globex', 'Globex', NULL)
             """
         )
-        cur.execute(
+        # 时间列是 timestamptz（ISSUE-006）：样本时刻必须显式声明为 UTC，
+        # 否则 PostgreSQL 会按会话时区解释字符串字面量，UTC+8 机器上会整体偏 8 小时。
+        sample_models = [
+            (
+                "acme/alpha-1", "acme", "Alpha 1", "first model", '["llm"]',
+                datetime(2024, 1, 15, 0, 0, tzinfo=timezone.utc),
+                100, 10, "https://example.com/a1",
+                datetime(2024, 1, 15, 0, 0, tzinfo=timezone.utc),
+                True, None, 1,
+            ),
+            (
+                "acme/beta-2", "acme", "Beta 2", "second model", '["llm","vision"]',
+                datetime(2024, 6, 20, 0, 0, tzinfo=timezone.utc),
+                200, 20, "https://example.com/b2",
+                datetime(2024, 6, 20, 0, 0, tzinfo=timezone.utc),
+                False, None, 2,
+            ),
+            (
+                "globex/gamma-3", "globex", "Gamma 3", "third model", '["vision"]',
+                datetime(2025, 3, 5, 0, 0, tzinfo=timezone.utc),
+                300, 30, "https://example.com/g3",
+                datetime(2025, 3, 5, 0, 0, tzinfo=timezone.utc),
+                True, None, 3,
+            ),
+        ]
+        cur.executemany(
             """
             INSERT INTO models
                 (model_id, provider, model_name, description, tags, created_at,
                  downloads, likes, model_card_url, inserted_at, is_open_source,
                  price, huggingface_rank)
-            VALUES
-                ('acme/alpha-1', 'acme', 'Alpha 1', 'first model', '["llm"]',
-                 '2024-01-15 00:00:00', 100, 10, 'https://example.com/a1',
-                 '2024-01-15 00:00:00', TRUE, NULL, 1),
-                ('acme/beta-2', 'acme', 'Beta 2', 'second model', '["llm","vision"]',
-                 '2024-06-20 00:00:00', 200, 20, 'https://example.com/b2',
-                 '2024-06-20 00:00:00', FALSE, NULL, 2),
-                ('globex/gamma-3', 'globex', 'Gamma 3', 'third model', '["vision"]',
-                 '2025-03-05 00:00:00', 300, 30, 'https://example.com/g3',
-                 '2025-03-05 00:00:00', TRUE, NULL, 3)
-            """
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            sample_models,
         )
         cur.execute(
             """

@@ -41,31 +41,39 @@ flowchart LR
 
 > ⚠️ 早期文档对 `sync_log` / `models` 的字段描述是错的，以本节为准（已核对线上库）。
 
-### 2.1 类型陷阱：时间列存成了 TEXT
+### 2.1 时间列一律 `timestamptz`（UTC 存储）
 
-| 表.列 | 实际类型 | 说明 |
+| 表.列 | 类型 | 说明 |
 |---|---|---|
-| `sync_log.started_at` / `finished_at` | **text** | 存 ISO 字符串 |
-| `models.inserted_at` | **text** | 存 ISO 字符串 |
-| `model_tags.inserted_at` | **text** | 存 ISO 字符串 |
+| `models.created_at` / `inserted_at` | `timestamptz` | HF `created_at` / OR `created`；`inserted_at` 默认 `CURRENT_TIMESTAMP` |
+| `sync_log.started_at` / `finished_at` | `timestamptz` | |
+| `model_tags.inserted_at` | `timestamptz` | 默认 `CURRENT_TIMESTAMP` |
+| `providers.*` / `model_analysis.*` / `model_arena_info.*` 时间列 | `timestamptz` | 一直是，未动 |
 
-任何按时间过滤的查询**必须显式转型**，否则直接报错：
+- 写入一律传 **aware `datetime`**（`datetime.now(timezone.utc)` / 由 epoch 或 ISO 串 parse
+  出的 UTC 值），不要再传格式化字符串。
+- 读出的值是 aware datetime，但**偏移量来自会话时区**（本地库常是 `Asia/Shanghai`）。
+  API 边界统一在 pydantic 层归一化成 UTC（`backend/models.py` 的 `UtcDatetime`），
+  所以响应永远带 `+00:00`。别指望 `SET TIME ZONE 'UTC'`：Supabase transaction pooler
+  每个事务可能换物理连接，会话级设置不保证延续。
+- 时间轴 `year=` 窗口按 **UTC 年**切；前端按本地时区显示时，跨年边界可能差一天
+  （有意取舍，见 `_calculate_timeline_window()` 的 docstring）。
 
-```sql
--- ❌ operator does not exist: text >= timestamp with time zone
-WHERE started_at >= NOW() - INTERVAL '1 day'
--- ✅
-WHERE started_at::timestamptz >= NOW() - INTERVAL '1 day'
-```
-
-**不要把"SQL 报错"误读成"没有数据"**，那会导致误告警。
+**历史（ISSUE-006 已修）**：这几列曾经是 `text`/`timestamp without time zone`。
+当时按时间过滤必须写 `started_at::timestamptz`，否则 Postgres 直接报
+`operator does not exist: text >= timestamp with time zone`；而 naive `timestamp`
+把 UTC 时刻存成没有时区标记的墙上时间，API 序列化出 `"2026-10-16T04:00:00"`，
+浏览器按本地时区解析，整条时间轴偏移。现在列已是 `timestamptz`，**不要再加
+`::timestamptz` 转型**（会掩盖真正的类型错误）。遗留教训仍然有效：
+**不要把"SQL 报错"误读成"没有数据"**。
 
 ### 2.2 `models`（核心表）
 
 `id`(bigint) / `model_id`(text, 主键) / `provider`(text) / `model_name`(text) /
-`description`(text) / `tags`(text, JSON 字符串) / `created_at`(timestamp, 无时区) /
+`description`(text) / `tags`(text, JSON 字符串) / `created_at`(timestamptz) /
 `downloads`(bigint) / `likes`(bigint) / `model_card_url`(text) /
-`inserted_at`(**text**) / `is_open_source`(boolean) / `price`(jsonb) / `huggingface_rank`(int)
+`inserted_at`(timestamptz, 默认 `CURRENT_TIMESTAMP`) / `is_open_source`(boolean) /
+`price`(jsonb) / `huggingface_rank`(int)
 
 - `model_id` 形如 `provider/name`，**含斜杠**（影响 API 路由设计，见第 3 节）。
 - `created_at` 对 HF 是 HF 记录的发布时间；对 OpenRouter 是 API 的 `created` 时间戳。
@@ -81,7 +89,7 @@ WHERE started_at::timestamptz >= NOW() - INTERVAL '1 day'
 
 ### 2.4 `sync_log`（**只被 HF 链路写入**）
 
-`id` / `provider` / `started_at`(**text**) / `finished_at`(**text**) / `status`(text) /
+`id` / `provider` / `started_at`(timestamptz) / `finished_at`(timestamptz) / `status`(text) /
 `processed`(bigint) / `inserted`(bigint) / `error_message`(text)
 
 - **每厂商每轮一行**，`status` 实测只出现过 `'success'`。

@@ -31,7 +31,6 @@ logging.basicConfig(level=LOGGING_LEVEL, format="%(asctime)s [%(levelname)s] %(m
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_PATH = BASE_DIR / ".env"
 DEFAULT_DB_URL = "postgresql://USER:PASSWORD@HOST:5432/silicon_river"
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 HTTP_TIMEOUT = 15
 AVATAR_MAX_BYTES = int(os.getenv("AVATAR_MAX_BYTES", "524288"))
 
@@ -55,11 +54,11 @@ class ModelRecord:
     model_name: str
     description: str
     tags: List[str]
-    created_at: str
+    created_at: datetime
     downloads: int | None
     likes: int | None
     model_card_url: str
-    inserted_at: str
+    inserted_at: datetime
     is_open_source: Optional[bool]
     price: Optional[Dict[str, object]]
     huggingface_rank: Optional[int]
@@ -89,16 +88,25 @@ def hf_client() -> HfApi:
     return HfApi(token=token)
 
 
-def normalise_datetime(value: datetime | None) -> datetime:
+def normalise_datetime(value: datetime | str | None) -> datetime:
+    """把 HF 给的时间值统一成 UTC aware `datetime`（ISSUE-006：不再格式化成字符串）。
+
+    HF 的 `ModelInfo.created_at` 通常是 aware datetime，`lastModified` 等字段
+    在部分版本里是字符串且带 `Z` 后缀；naive 值按 UTC 解释（这些列的语义本来
+    就是 UTC）。入库列是 `timestamptz`，传 aware datetime 才不会丢时区语义。
+    """
     if value is None:
-        value = datetime.now(timezone.utc)
+        return datetime.now(timezone.utc)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return datetime.now(timezone.utc)
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        value = datetime.fromisoformat(text)
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def format_timestamp(value: datetime | None) -> str:
-    return normalise_datetime(value).strftime(TIMESTAMP_FORMAT)
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +299,10 @@ def to_record(provider: str, info: ModelInfo, description: str | None = None) ->
     if description is None:
         description = _description_from_card_data(info)
     tags = list(getattr(info, "tags", []) or [])
-    created_at = format_timestamp(getattr(info, "created_at", None) or getattr(info, "lastModified", None))
-    inserted_at = format_timestamp(datetime.now(timezone.utc))
+    created_at = normalise_datetime(
+        getattr(info, "created_at", None) or getattr(info, "lastModified", None)
+    )
+    inserted_at = datetime.now(timezone.utc)
     downloads = getattr(info, "downloads", None)
     likes = getattr(info, "likes", None)
     private_attr = getattr(info, "private", None)
@@ -617,8 +627,8 @@ def save_models(conn: psycopg.Connection, provider: str, records: Iterable[Model
             """,
             (
                 provider,
-                started_at.isoformat(),
-                finished_at.isoformat(),
+                normalise_datetime(started_at),
+                finished_at,
                 "success",
                 processed,
                 inserted,

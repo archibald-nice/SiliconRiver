@@ -52,8 +52,14 @@ docs/        内部文档（gitignore）：issues/ 是缺陷档，不进仓库
 
 **数据与代码**
 
-5. 时间列是 **text**（`sync_log.started_at/finished_at`、`models.inserted_at`、`model_tags.inserted_at`）。
-   SQL 按时间过滤必须 `::timestamptz` 显式转型，否则直接报错——**别把 SQL 报错误读成"没数据"**。
+5. 时间列一律 **`timestamptz`**（UTC 存储，ISSUE-006 已全量迁移）：
+   - 写入传 **aware `datetime`**（`datetime.now(timezone.utc)`、epoch/ISO 解析出的 UTC 值），
+     **不要传格式化字符串**；naive datetime 会被按会话时区解释，本地 UTC+8 机器上整体偏 8 小时；
+   - 读出是 aware datetime，但偏移量来自**会话时区**，所以 API 输出统一由
+     `backend/models.py` 的 `UtcDatetime`（`AfterValidator`）归一成 UTC，响应永远带 `+00:00`；
+     不要靠 `SET TIME ZONE 'UTC'` 兜底——Supabase transaction pooler 会话级设置不保证延续；
+   - **不要再写 `::timestamptz`**：列已经是 timestamptz，多余转型只会掩盖真正的类型错误。
+   SQL 按时间过滤报错时**别把报错误读成"没数据"**——这是这几列当年是 text/naive timestamp 留下的历史教训。
 6. 统计真正新增用 `RETURNING (xmax = 0)`，**不是** `rowcount`
    （`ON CONFLICT DO UPDATE` 下 rowcount 恒为 1，会把更新误计成新增）。
 7. 每日同步与 AI 分析是**两个独立定时任务**，不要合并；
@@ -110,7 +116,7 @@ bash scripts/daily_sync.sh [--dry-run]                       # 每日同步编�
 .venv/bin/python scripts/check_supabase.py                   # 体检（只读，可安全贴输出）
 ```
 
-测试基线：`247 passed`，约 20 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
+测试基线：`320 passed`，约 20 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
 async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此前 33 个 async 用例一直是被跳过的，
 "全绿"并不覆盖它们。**测试不许依赖真实网络**：mock 漏一个客户端就会变成 70 秒超时 + 回落假数据，
 既慢又不稳定。详解见 ARCHITECTURE.md 第 8 节。

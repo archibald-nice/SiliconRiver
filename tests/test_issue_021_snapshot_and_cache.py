@@ -16,7 +16,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi.responses import Response
 
@@ -62,7 +62,8 @@ def _model_row(**overrides) -> dict:
         "model_name": "alpha-1",
         "description": "d",
         "tags": "[]",
-        "created_at": datetime(2024, 1, 15),
+        # 真实库里是 timestamptz，psycopg 取出来是 aware datetime（ISSUE-006）
+        "created_at": datetime(2024, 1, 15, tzinfo=timezone.utc),
         "downloads": 1,
         "likes": 2,
         "model_card_url": "https://example.com/alpha-1",

@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import psycopg
 import pytest
 
@@ -91,10 +93,15 @@ def _ensure_seed_rows(db_url: str) -> None:
                  price, huggingface_rank)
             VALUES
                 ('acme/alpha-1', 'acme', 'Alpha 1', 'first model', '["llm"]',
-                 '2024-01-15 00:00:00', 100, 10, 'https://example.com/a1',
-                 '2024-01-15 00:00:00', TRUE, NULL, 1)
+                 %s, 100, 10, 'https://example.com/a1',
+                 %s, TRUE, NULL, 1)
             ON CONFLICT (model_id) DO NOTHING
-            """
+            """,
+            # 时间列是 timestamptz：必须显式 UTC，字符串会按会话时区解释（ISSUE-006）。
+            (
+                datetime(2024, 1, 15, tzinfo=timezone.utc),
+                datetime(2024, 1, 15, tzinfo=timezone.utc),
+            ),
         )
 
 

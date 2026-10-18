@@ -164,15 +164,17 @@ class AnalysisIntegration:
         # 先删除该模型的现有标签
         cursor.execute("DELETE FROM model_tags WHERE model_id = %s", (model_id,))
 
-        # 插入新标签
+        # 插入新标签。`inserted_at` 是 timestamptz（ISSUE-006），显式传 UTC aware
+        # datetime，不要依赖数据库会话时区，也不要再塞字符串。
+        now = datetime.now(timezone.utc)
         for tag in tags:
             cursor.execute(
                 """
                 INSERT INTO model_tags (model_id, tag, inserted_at)
-                VALUES (%s, %s, NOW())
+                VALUES (%s, %s, %s)
                 ON CONFLICT (model_id, tag) DO NOTHING
                 """,
-                (model_id, tag),
+                (model_id, tag, now),
             )
 
         LOGGER.debug(f"已保存 {len(tags)} 个标签到数据库")

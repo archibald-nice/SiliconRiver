@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 # 前缀（仓库组织名）/ model_analysis 里的副本 / models 里的权威 provider，三者互不相同
@@ -35,10 +37,17 @@ def aion_model(ensure_seeded):
                  downloads, likes, model_card_url, inserted_at, is_open_source,
                  price, huggingface_rank)
             VALUES (%s, %s, 'Aion 3.0', 'provider differs from model_id prefix', '["llm"]',
-                    '2024-09-01 00:00:00', 1, 2, 'https://example.com/aion',
-                    '2024-09-01 00:00:00', TRUE, NULL, NULL)
+                    %s, 1, 2, 'https://example.com/aion',
+                    %s, TRUE, NULL, NULL)
             """,
-            (MODEL_ID, AUTHORITATIVE),
+            # 时间列是 timestamptz（ISSUE-006）：显式传 UTC aware datetime，
+            # 别塞字符串——字符串会按会话时区解释，UTC+8 机器上整体偏 8 小时。
+            (
+                MODEL_ID,
+                AUTHORITATIVE,
+                datetime(2024, 9, 1, tzinfo=timezone.utc),
+                datetime(2024, 9, 1, tzinfo=timezone.utc),
+            ),
         )
         cur.execute(
             """

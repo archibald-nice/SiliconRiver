@@ -1,10 +1,33 @@
 """Silicon River API Pydantic 模型定义。"""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Annotated, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    """把时间字段统一成 UTC aware（ISSUE-006）。
+
+    为什么要在序列化层做一次，而不是指望数据库：
+
+    - 列已经是 `timestamptz`，psycopg 取出来是 **aware** datetime，但偏移量是
+      *会话时区*，不是 UTC。本地库/某些部署的 TimeZone 是 `Asia/Shanghai` 时，
+      `2025-06-03T12:00Z` 会读成 `2025-06-03T20:00:00+08:00`——时刻没错，但 API
+      输出的偏移随部署环境变化，前端/缓存/日志的对比全得跟着变。
+    - 靠 `SET TIME ZONE 'UTC'` 固定会话时区不可靠：Supabase 的 transaction pooler
+      每个事务可能换物理连接，会话级设置不保证延续。
+    - 所以 API 边界统一归一化：naive 一律按 UTC 解释（历史兼容），aware 一律转 UTC，
+      响应固定输出 `+00:00`。
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+# 时间字段统一类型：校验后一定是 UTC aware datetime
+UtcDatetime = Annotated[datetime, AfterValidator(_ensure_utc)]
 
 
 class Model(BaseModel):
@@ -16,7 +39,7 @@ class Model(BaseModel):
     model_name: str
     description: Optional[str]
     tags: List[str]
-    created_at: datetime
+    created_at: UtcDatetime
     downloads: Optional[int]
     likes: Optional[int]
     model_card_url: str
@@ -35,12 +58,12 @@ class ModelAnalysis(BaseModel):
     use_cases: List[str] = []
     performance_metrics: Optional[Dict[str, object]] = None
     llm_model_used: Optional[str] = None
-    analyzed_at: Optional[datetime] = None
+    analyzed_at: Optional[UtcDatetime] = None
     tags: List[str] = []
     # 里程碑字段（阶段一新增）
     is_milestone: bool = False
     milestone_features: Optional[str] = None
-    updated_at: Optional[datetime] = None
+    updated_at: Optional[UtcDatetime] = None
 
 
 class ArenaScoreInfo(BaseModel):
@@ -52,7 +75,7 @@ class ArenaScoreInfo(BaseModel):
     rank: Optional[int] = None
     score: Optional[float] = None
     category: str = "overall"
-    updated_at: Optional[datetime] = None
+    updated_at: Optional[UtcDatetime] = None
 
 
 class ArenaScoreSummary(BaseModel):
@@ -74,7 +97,7 @@ class TimelineModel(BaseModel):
     provider: str
     model_name: str
     description: Optional[str]
-    created_at: datetime
+    created_at: UtcDatetime
     model_card_url: str
     tags: List[str]
     avatar_url: Optional[str] = None
@@ -127,7 +150,7 @@ class TimelineResponse(BaseModel):
     total: int
     page: int
     page_size: int
-    start: datetime
-    end: datetime
+    start: UtcDatetime
+    end: UtcDatetime
     preset: str
     label: str

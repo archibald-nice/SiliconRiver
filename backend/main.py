@@ -194,12 +194,13 @@ async def lifespan(_: FastAPI):
 
 
 def _utcnow() -> datetime:
-    """UTC「现在」，返回 naive datetime。
+    """UTC「现在」，返回 aware datetime。
 
-    刻意剥掉 tzinfo：models.created_at 列是 `timestamp without time zone`，
-    若传入带时区的值，Postgres 会按会话时区换算后再落库，导致时间轴窗口边界偏移。
+    ISSUE-006 之后时间列统一是 `timestamptz`，库里存的是绝对时刻（UTC）：
+    带 tzinfo 的值和列类型匹配，Postgres 不会按会话时区做隐式换算，
+    序列化出来天然带 `+00:00`，前端 `new Date()` 才能按访问者本地时区正确渲染。
     """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(timezone.utc)
 
 
 # 生产环境是 Vercel Services 同域部署：前端用自己的域名发相对路径 /api/*，
@@ -694,22 +695,29 @@ def _escape_like(value: str) -> str:
 
 
 def _calculate_timeline_window(preset: str, year: Optional[int]) -> tuple[datetime, datetime, str]:
+    """时间轴查询窗口，边界一律是 UTC aware datetime。
+
+    `models.created_at` 是 `timestamptz`，比较时不能混用 naive 值（否则会按
+    会话时区隐式换算）。**年份窗口按 UTC 年切**：前端按访问者本地时区显示，
+    跨年边界（例如 UTC+8 的 1 月 1 日 00:00–07:59）可能落到相邻年份的视觉位置上，
+    这是有意取舍——服务端不做时区猜测，前端要按本地年切可以自己传更精确的窗口。
+    """
     now = _utcnow()
     if year is not None:
-        start_dt = datetime(year, 1, 1)
-        end_dt = datetime(year, 12, 31, 23, 59, 59)
+        start_dt = datetime(year, 1, 1, tzinfo=timezone.utc)
+        end_dt = datetime(year, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
         return start_dt, end_dt, f"{year}年"
 
     preset = preset or "30d"
     if preset == "all":
-        start_dt = datetime(1970, 1, 1)
+        start_dt = datetime(1970, 1, 1, tzinfo=timezone.utc)
         end_dt = now
         return start_dt, end_dt, "全部"
     if preset == "6m":
         start_dt = now - timedelta(days=182)
         label = "近半年"
     elif preset == "1y":
-        start_dt = datetime(now.year, 1, 1)
+        start_dt = datetime(now.year, 1, 1, tzinfo=timezone.utc)
         end_dt = now
         return start_dt, end_dt, "今年"
     else:

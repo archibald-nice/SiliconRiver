@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.routing import APIRoute
@@ -168,15 +168,16 @@ def test_parse_tags(raw, expected):
 
 
 def test_timeline_window_for_explicit_year():
+    """年份窗口按 UTC 年切（ISSUE-006）：边界必须是带 UTC 的 datetime。"""
     start, end, label = main._calculate_timeline_window(preset="30d", year=2024)
-    assert start == datetime(2024, 1, 1)
-    assert end == datetime(2024, 12, 31, 23, 59, 59)
+    assert start == datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert end == datetime(2024, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc)
     assert label == "2024年"
 
 
 def test_timeline_window_preset_all_starts_at_epoch():
     start, end, label = main._calculate_timeline_window(preset="all", year=None)
-    assert start == datetime(1970, 1, 1)
+    assert start == datetime(1970, 1, 1, tzinfo=timezone.utc)
     assert label == "全部"
     assert end >= start
 
@@ -195,18 +196,18 @@ def test_timeline_window_6m_spans_182_days():
     assert timedelta(days=181) < (end - start) <= timedelta(days=183)
 
 
-def test_timeline_window_returns_naive_datetimes():
-    """必须是 naive datetime。
+def test_timeline_window_returns_utc_aware_datetimes():
+    """窗口边界必须是 UTC aware datetime（ISSUE-006 之后列是 timestamptz）。
 
-    models.created_at 是 `timestamp without time zone`；一旦带上 tzinfo，
-    Postgres 会按会话时区换算，时间轴窗口边界就会漂移。
+    反向断言：一旦退回 naive，psycopg 会按**会话时区**解释参数，
+    与库里按 UTC 存的 timestamptz 比较时窗口整体漂移。
     """
     for preset in ("30d", "6m", "1y", "all"):
         start, end, _ = main._calculate_timeline_window(preset=preset, year=None)
-        assert start.tzinfo is None, f"preset={preset} 的 start 带了时区"
-        assert end.tzinfo is None, f"preset={preset} 的 end 带了时区"
+        assert start.tzinfo is timezone.utc, f"preset={preset} 的 start 不是 UTC"
+        assert end.tzinfo is timezone.utc, f"preset={preset} 的 end 不是 UTC"
     start, end, _ = main._calculate_timeline_window(preset="30d", year=2024)
-    assert start.tzinfo is None and end.tzinfo is None
+    assert start.tzinfo is timezone.utc and end.tzinfo is timezone.utc
 
 
 # --------------------------------------------------------------------------

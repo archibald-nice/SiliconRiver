@@ -1,4 +1,11 @@
-"""Initialize PostgreSQL schema for the Silicon River project."""
+"""Initialize PostgreSQL schema for the Silicon River project.
+
+时间列统一用 `timestamp with time zone`（timestamptz）存 UTC 时刻（ISSUE-006）：
+带时区的类型在写/读两侧都不会被会话时区悄悄换算，API 序列化出来天然带 `+00:00`
+（或 `Z`），前端 `new Date()` 才会按访问者本地时区正确渲染。
+新建库直接用本文件的 DDL；既有库用 `scripts/migrate_timestamps_to_timestamptz.py`
+迁移（默认 dry-run，必须人工确认后加 --apply）。
+"""
 from __future__ import annotations
 
 import os
@@ -25,11 +32,11 @@ CREATE TABLE IF NOT EXISTS models (
 	model_name text NOT NULL,
 	description text NULL,
 	tags text NULL,
-	created_at timestamp NOT NULL,
+	created_at timestamp with time zone NOT NULL,
 	downloads int8 NULL,
 	likes int8 NULL,
 	model_card_url text NOT NULL,
-	inserted_at text NOT NULL,
+	inserted_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	is_open_source bool NULL,
 	price jsonb NULL,
 	huggingface_rank int4 NULL,
@@ -54,8 +61,8 @@ SYNC_LOG_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS sync_log (
     id BIGSERIAL PRIMARY KEY,
     provider TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    finished_at TEXT NOT NULL,
+    started_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    finished_at TIMESTAMP WITH TIME ZONE NOT NULL,
     status TEXT NOT NULL,
     processed BIGINT NOT NULL DEFAULT 0,
     inserted BIGINT NOT NULL DEFAULT 0,
@@ -68,7 +75,7 @@ CREATE TABLE IF NOT EXISTS model_tags (
     id BIGSERIAL PRIMARY KEY,
     model_id TEXT NOT NULL,
     tag TEXT NOT NULL,
-    inserted_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+    inserted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (model_id, tag),
     FOREIGN KEY (model_id) REFERENCES models(model_id) ON DELETE CASCADE
 );

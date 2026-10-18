@@ -27,7 +27,6 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_PATH = BASE_DIR / ".env"
 DEFAULT_DB_URL = "postgresql://USER:PASSWORD@HOST:5432/silicon_river"
 DEFAULT_ENDPOINT = "https://openrouter.ai/api/v1/models"
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # ISSUE-032：provider key 别名表。键既可能是 model_id 的斜杠前缀，也可能是 name 里
 # 冒号前的展示名，值统一成 `PROVIDERS_OPENROUTER` 白名单收录的写法。
@@ -68,9 +67,9 @@ class ModelRecord:
     provider: str
     model_name: str
     description: str
-    created_at: str
+    created_at: datetime
     model_card_url: str
-    inserted_at: str
+    inserted_at: datetime
     price: Optional[Dict[str, object]]
     is_open_source: Optional[bool]
     huggingface_rank: Optional[int]
@@ -121,12 +120,14 @@ def upsert_provider(
         )
 
 
-def normalise_timestamp(epoch_seconds: int | float | None) -> str:
+def normalise_timestamp(epoch_seconds: int | float | None) -> datetime:
+    """OpenRouter 的 `created` 是 unix 秒 → UTC aware datetime（ISSUE-006）。
+
+    缺值时退回当前 UTC 时刻（旧行为如此，抓取侧本来就是「不知道就当现在」）。
+    """
     if epoch_seconds is None:
-        now = datetime.now(timezone.utc)
-        return now.strftime(TIMESTAMP_FORMAT)
-    dt = datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
-    return dt.strftime(TIMESTAMP_FORMAT)
+        return datetime.now(timezone.utc)
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
 
 
 def _id_prefix(model_id: str | None) -> str:
@@ -205,7 +206,7 @@ def to_record(raw: dict) -> ModelRecord:
     created = raw.get("created")
     created_at = normalise_timestamp(created if isinstance(created, (int, float)) else None)
     model_name = name
-    inserted_at = datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
+    inserted_at = datetime.now(timezone.utc)
     encoded_id = quote(model_id or name, safe="")
     model_card_url = f"https://openrouter.ai/models/{encoded_id}"
     pricing = raw.get("pricing")
