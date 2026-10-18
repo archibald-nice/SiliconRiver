@@ -536,8 +536,8 @@ export class HelixConstellationMode extends BaseTimelineMode {
     // 提取起始年份和结束年份
     const startDate = new Date(minTime);
     const endDate = new Date(maxTime);
-    const startYear = startDate.getUTCFullYear();
-    const endYear = endDate.getUTCFullYear();
+    const startYear = startDate.getFullYear();
+    const endYear = endDate.getFullYear();
 
     // 清空旧锚点
     this.yearAnchors.forEach(anchor => {
@@ -566,7 +566,8 @@ export class HelixConstellationMode extends BaseTimelineMode {
     // 遍历每个整年份
     for (let year = startYear; year <= endYear + 1; year++) {
       // 计算该年份 1 月 1 日 00:00:00 UTC 的时间戳
-      const yearStartDate = new Date(Date.UTC(year, 0, 1, 0, 0, 0));
+      // ISSUE-006：锚点按访问者本地日历取整，与气泡里 toLocaleString() 的口径一致
+      const yearStartDate = new Date(year, 0, 1, 0, 0, 0);
       const yearTimestamp = yearStartDate.getTime();
 
       // 检查是否在时间轴范围内
@@ -614,8 +615,8 @@ export class HelixConstellationMode extends BaseTimelineMode {
 
     const startDate = new Date(minTime);
     const endDate = new Date(maxTime);
-    const startYear = startDate.getUTCFullYear();
-    const endYear = endDate.getUTCFullYear();
+    const startYear = startDate.getFullYear();
+    const endYear = endDate.getFullYear();
 
     // 清空旧锚点
     this.quarterAnchors.forEach(anchor => {
@@ -645,7 +646,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
     for (let year = startYear; year <= endYear; year++) {
       for (let quarter = 1; quarter <= 4; quarter++) {
         const month = (quarter - 1) * 3; // Q1: 0, Q2: 3, Q3: 6, Q4: 9
-        const quarterStartDate = new Date(Date.UTC(year, month, 1, 0, 0, 0));
+        const quarterStartDate = new Date(year, month, 1, 0, 0, 0);
         const quarterTimestamp = quarterStartDate.getTime();
 
         // 检查是否在时间轴范围内
@@ -691,8 +692,8 @@ export class HelixConstellationMode extends BaseTimelineMode {
 
     const startDate = new Date(minTime);
     const endDate = new Date(maxTime);
-    const startYear = startDate.getUTCFullYear();
-    const endYear = endDate.getUTCFullYear();
+    const startYear = startDate.getFullYear();
+    const endYear = endDate.getFullYear();
 
     // 清空旧锚点
     this.monthAnchors.forEach(anchor => {
@@ -721,7 +722,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
     // 遍历每个月份
     for (let year = startYear; year <= endYear; year++) {
       for (let month = 0; month < 12; month++) {
-        const monthStartDate = new Date(Date.UTC(year, month, 1, 0, 0, 0));
+        const monthStartDate = new Date(year, month, 1, 0, 0, 0);
         const monthTimestamp = monthStartDate.getTime();
 
         // 检查是否在时间轴范围内

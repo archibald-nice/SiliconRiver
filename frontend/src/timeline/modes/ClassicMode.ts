@@ -181,7 +181,8 @@ export class ClassicMode extends BaseTimelineMode {
 
   private createDateSprite(date: Date): InstanceType<typeof THREE.Sprite> {
     const toTwoDigits = (value: number) => String(value).padStart(2, "0");
-    const text = `${date.getUTCFullYear()}-${toTwoDigits(date.getUTCMonth() + 1)}-${toTwoDigits(date.getUTCDate())}`;
+    // ISSUE-006：刻度文字按访问者本地时区显示（数据以 UTC 存储）
+    const text = `${date.getFullYear()}-${toTwoDigits(date.getMonth() + 1)}-${toTwoDigits(date.getDate())}`;
 
     const canvas = document.createElement("canvas");
     const width = 640;
