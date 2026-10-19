@@ -90,7 +90,17 @@ fi
 EXIT_CODE=0
 
 # ---------- 1) Hugging Face 增量 ----------
-log "→ Hugging Face 增量抓取（上限 ${HF_DAILY_FETCH_LIMIT:-200}）"
+# 这一行原来直接打 ${HF_DAILY_FETCH_LIMIT:-200}，但脚本自己并不 export .env 里的值
+# （env 是 Python 侧 load_dotenv 读的），所以不管 .env 写什么都会打印 200 ——
+# 2026-10-19 的日志里就出现了「上限 200」而实际跑了全量（ISSUE-037）。
+# 这里显式从 .env 取一次，取不到再退回「不限」。
+HF_LIMIT_DISPLAY="$(grep -E '^[[:space:]]*HF_DAILY_FETCH_LIMIT=' .env 2>/dev/null \
+  | tail -1 | cut -d= -f2- | tr -d '[:space:]"')"
+HF_LIMIT_DISPLAY="${HF_LIMIT_DISPLAY:-${HF_DAILY_FETCH_LIMIT:-}}"
+if [[ -z "${HF_LIMIT_DISPLAY}" || "${HF_LIMIT_DISPLAY}" == "0" ]]; then
+  HF_LIMIT_DISPLAY="0（不限，按 pipeline_tag 全量）"
+fi
+log "→ Hugging Face 增量抓取（上限 ${HF_LIMIT_DISPLAY}）"
 if "${PYTHON}" -m src.scraper.fetch_models_incr_day >>"${LOG_FILE}" 2>&1; then
   log "  [成功] Hugging Face 增量完成"
 else

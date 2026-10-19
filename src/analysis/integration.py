@@ -33,6 +33,9 @@ class AnalysisIntegration:
         self.db_url = db_url
         self.analyzer = analyzer or AsyncModelAnalyzer()
         self.tag_generator = tag_generator or TagGenerator()
+        # 写库复用一条连接（ISSUE-037）：每个模型都 psycopg.connect 意味着重走
+        # TCP + TLS + Supabase pooler 认证。第二阶段是串行写库，单连接安全。
+        self._conn: psycopg.Connection | None = None
 
     async def analyze_and_save_model(
         self,
@@ -73,6 +76,25 @@ class AnalysisIntegration:
         )
         return result["succeeded"] == 1
 
+    def _get_connection(self) -> psycopg.Connection:
+        """取写库连接；已关闭就重连（Supabase 会主动踢掉空闲连接）。"""
+        if self._conn is None or self._conn.closed:
+            self._conn = psycopg.connect(self.db_url)
+        return self._conn
+
+    def _drop_connection(self) -> None:
+        """出错时把连接丢掉，下次调用重建，避免一条坏连接拖死整批。"""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:  # noqa: BLE001 - 关闭失败不该掩盖原始错误
+                pass
+            self._conn = None
+
+    def close(self) -> None:
+        """显式释放写库连接（CLI 结束时调用）。"""
+        self._drop_connection()
+
     def _save_analysis_to_db(
         self,
         model_id: str,
@@ -81,7 +103,7 @@ class AnalysisIntegration:
         analysis_result: AnalysisResult,
         generated_tags: list[str],
     ) -> bool:
-        """将分析结果保存到数据库。
+        """将分析结果保存到数据库（复用一条连接，ISSUE-037）。
 
         Args:
             model_id: 模型ID
@@ -94,88 +116,89 @@ class AnalysisIntegration:
             是否成功保存
         """
         try:
-            with psycopg.connect(self.db_url) as conn:
-                with conn.cursor() as cursor:
-                    # 处理不同类型的字段
-                    # key_features 和 use_cases 是 TEXT[] 数组，直接传递列表
-                    # performance_metrics 是 JSONB，需要 json.dumps()
-                    performance_metrics_json = json.dumps(analysis_result.performance_metrics)
+            conn = self._get_connection()
+            with conn.cursor() as cursor:
+                # performance_metrics 是 JSONB，需要 json.dumps()
+                performance_metrics_json = json.dumps(analysis_result.performance_metrics)
 
-                    # 保存分析结果到model_analysis表
-                    cursor.execute(
-                        """
-                        INSERT INTO model_analysis (
-                            model_id,
-                            provider,
-                            model_name,
-                            analysis_summary,
-                            key_features,
-                            use_cases,
-                            performance_metrics,
-                            llm_model_used,
-                            analyzed_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
-                        ON CONFLICT (model_id) DO UPDATE SET
-                            provider = EXCLUDED.provider,
-                            model_name = EXCLUDED.model_name,
-                            analysis_summary = EXCLUDED.analysis_summary,
-                            key_features = EXCLUDED.key_features,
-                            use_cases = EXCLUDED.use_cases,
-                            performance_metrics = EXCLUDED.performance_metrics,
-                            llm_model_used = EXCLUDED.llm_model_used,
-                            analyzed_at = EXCLUDED.analyzed_at
-                        """,
-                        (
-                            model_id,
-                            provider,
-                            model_name,
-                            analysis_result.analysis_summary,
-                            analysis_result.key_features,  # 直接传递列表（psycopg3会处理）
-                            analysis_result.use_cases,     # 直接传递列表（psycopg3会处理）
-                            performance_metrics_json,      # JSON字符串
-                            analysis_result.llm_model_used,
-                            datetime.now(timezone.utc),
-                        ),
-                    )
+                cursor.execute(
+                    """
+                    INSERT INTO model_analysis (
+                        model_id,
+                        provider,
+                        model_name,
+                        analysis_summary,
+                        key_features,
+                        use_cases,
+                        performance_metrics,
+                        llm_model_used,
+                        analyzed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                    ON CONFLICT (model_id) DO UPDATE SET
+                        provider = EXCLUDED.provider,
+                        model_name = EXCLUDED.model_name,
+                        analysis_summary = EXCLUDED.analysis_summary,
+                        key_features = EXCLUDED.key_features,
+                        use_cases = EXCLUDED.use_cases,
+                        performance_metrics = EXCLUDED.performance_metrics,
+                        llm_model_used = EXCLUDED.llm_model_used,
+                        analyzed_at = EXCLUDED.analyzed_at
+                    """,
+                    (
+                        model_id,
+                        provider,
+                        model_name,
+                        analysis_result.analysis_summary,
+                        analysis_result.key_features,  # 直接传递列表（psycopg3会处理）
+                        analysis_result.use_cases,     # 直接传递列表（psycopg3会处理）
+                        performance_metrics_json,      # JSON字符串
+                        analysis_result.llm_model_used,
+                        datetime.now(timezone.utc),
+                    ),
+                )
 
-                    # 保存生成的标签到model_tags表
-                    self._save_tags_to_db(cursor, model_id, generated_tags)
+                self._save_tags_to_db(cursor, model_id, generated_tags)
+                conn.commit()
 
-                    conn.commit()
-                    LOGGER.info(
-                        f"成功保存模型分析：{model_id}（{len(generated_tags)}个标签）"
-                    )
-                    return True
+            LOGGER.info(
+                f"成功保存模型分析：{model_id}（{len(generated_tags)}个标签）"
+            )
+            return True
 
         except psycopg.Error as e:
+            # 连接可能已经坏了：丢掉它，下一个模型重建（否则整批都会连带失败）
             LOGGER.error(f"数据库保存失败 {model_id}: {e}")
+            self._drop_connection()
             return False
 
     def _save_tags_to_db(
         self, cursor: psycopg.cursor, model_id: str, tags: list[str]
     ) -> None:
-        """保存标签到数据库。
+        """保存标签到数据库（先删后插，用一条 executemany 写完，ISSUE-037）。
+
+        以前是 `for tag in tags: cursor.execute(INSERT ...)`——每个标签一次跨洋
+        往返，14 个标签就是 14 次（约 0.25 秒/次）。改成 `executemany` 后是 1 次。
 
         Args:
             cursor: 数据库游标
             model_id: 模型ID
             tags: 标签列表
         """
-        # 先删除该模型的现有标签
         cursor.execute("DELETE FROM model_tags WHERE model_id = %s", (model_id,))
+        if not tags:
+            return
 
-        # 插入新标签。`inserted_at` 是 timestamptz（ISSUE-006），显式传 UTC aware
-        # datetime，不要依赖数据库会话时区，也不要再塞字符串。
+        # `inserted_at` 是 timestamptz（ISSUE-006），显式传 UTC aware datetime，
+        # 不要依赖数据库会话时区，也不要塞字符串。
         now = datetime.now(timezone.utc)
-        for tag in tags:
-            cursor.execute(
-                """
-                INSERT INTO model_tags (model_id, tag, inserted_at)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (model_id, tag) DO NOTHING
-                """,
-                (model_id, tag, now),
-            )
+        cursor.executemany(
+            """
+            INSERT INTO model_tags (model_id, tag, inserted_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (model_id, tag) DO NOTHING
+            """,
+            [(model_id, tag, now) for tag in tags],
+        )
 
         LOGGER.debug(f"已保存 {len(tags)} 个标签到数据库")
 

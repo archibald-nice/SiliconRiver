@@ -121,7 +121,7 @@ bash scripts/daily_sync.sh [--dry-run]                       # 每日同步编�
 .venv/bin/python scripts/check_supabase.py                   # 体检（只读，可安全贴输出）
 ```
 
-测试基线：`465 passed`，约 22 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
+测试基线：`468 passed`，约 22 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
 async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此前 33 个 async 用例一直是被跳过的，
 "全绿"并不覆盖它们。**测试不许依赖真实网络**：mock 漏一个客户端就会变成 70 秒超时 + 回落假数据，
 既慢又不稳定。详解见 ARCHITECTURE.md 第 8 节。

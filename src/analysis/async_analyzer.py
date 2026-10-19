@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -269,13 +270,22 @@ class AsyncModelAnalyzer:
         ]
 
         try:
+            # 总预算按「波数」算，而不是「模型数 × 单模型秒数」（ISSUE-037）：
+            # 原来写成 len(model_ids) × 30 秒，1487 个模型 = 12 小时，等于永不超时
+            # （真正掐死任务的是 wrapper 的 1800 秒），日志里那句「批量超时」从来不会出现。
+            concurrency = max(1, int(getattr(self, "max_concurrent", 1) or 1))
+            waves = math.ceil(len(model_ids) / concurrency)
+            budget = ANALYSIS_TIMEOUT_SECONDS * waves
             results = await asyncio.wait_for(
                 asyncio.gather(*tasks, return_exceptions=True),
-                timeout=ANALYSIS_TIMEOUT_SECONDS * len(model_ids)
+                timeout=budget,
             )
             return results
         except asyncio.TimeoutError:
-            LOGGER.error(f"批量分析超时（{ANALYSIS_TIMEOUT_SECONDS * len(model_ids)}秒）")
+            LOGGER.error(
+                f"批量分析超时（预算 {budget} 秒 = 单模型 {ANALYSIS_TIMEOUT_SECONDS}s × "
+                f"{waves} 波，并发 {concurrency}）"
+            )
             return [None] * len(model_ids)
 
     async def _analyze_with_context(self, context: AnalysisContext) -> AnalysisResult | None:
@@ -287,10 +297,14 @@ class AsyncModelAnalyzer:
         Returns:
             分析结果或None
         """
-        total_start = time.time()
+        queued_at = time.time()
         monitor = get_monitor()
 
         async with self.semaphore:
+            # ISSUE-037：total_start 不能写在 semaphore 之前——那样「模型分析耗时」
+            # 会把排队等并发槽的时间也算进去（实测日志里出现过 112–210 秒的假 SLA 超时）。
+            total_start = time.time()
+            queue_wait = total_start - queued_at
             monitor.record_concurrent_analysis(self.max_concurrent - self.semaphore._value)
 
             try:
@@ -353,7 +367,11 @@ class AsyncModelAnalyzer:
                 monitor.record_latency("total_analysis", total_time_ms, success=True)
 
                 if total_time_ms > 15000:
-                    LOGGER.warning(f"模型分析耗时 {total_time_ms:.0f}ms，超过 SLA 15s 目标")
+                    # 明确区分「真正花在这条上的时间」与「排队等槽的时间」（ISSUE-037）
+                    LOGGER.warning(
+                        f"模型分析耗时 {total_time_ms:.0f}ms，超过 SLA 15s 目标"
+                        f"（其中排队等并发槽 {queue_wait * 1000:.0f}ms）"
+                    )
 
                 return analysis
 

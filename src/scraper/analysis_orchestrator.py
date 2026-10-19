@@ -100,13 +100,17 @@ class AnalysisOrchestrator:
         # 运行批量分析。
         # 必须是 asyncio.run(...)：analyze_batch 是协程，直接调用只会拿到
         # coroutine 对象，既不执行也不报错，直到有人对它取下标才炸。
-        results = asyncio.run(
-            self.integration.analyze_batch(
-                models=models,
-                batch_size=ANALYSIS_BATCH_SIZE,
-                delay_between_batches=ANALYSIS_DELAY,
+        try:
+            results = asyncio.run(
+                self.integration.analyze_batch(
+                    models=models,
+                    batch_size=ANALYSIS_BATCH_SIZE,
+                    delay_between_batches=ANALYSIS_DELAY,
+                )
             )
-        )
+        finally:
+            # 写库连接是复用的（ISSUE-037），跑完显式释放，别让进程退出前一直占着池子
+            self.integration.close()
 
         return {
             "enabled": True,
