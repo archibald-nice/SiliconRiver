@@ -246,7 +246,12 @@ def _last_model_upsert(cursor: FakeCursor) -> tuple[str, tuple]:
 
 
 def test_huggingface_write_sets_source(monkeypatch):
-    """HF 侧 upsert 的 INSERT 列、参数与 ON CONFLICT SET 都带 source='huggingface'。"""
+    """HF 侧 upsert 的 INSERT 列、参数与 ON CONFLICT SET 都带 source='huggingface'。
+
+    这里固定走逐行写路径（SCRAPER_BATCH_WRITE=0）：假 Cursor 只能识别逐行 SQL，
+    批量语句的参数形态（unnest 数组）由 tests/test_issue_034_batch_write.py 负责。
+    """
+    monkeypatch.setenv("SCRAPER_BATCH_WRITE", "0")
     _client, conn = _run_hf_fetch(monkeypatch, [_make_model("meta-llama/Llama-1")])
 
     sql, params = _last_model_upsert(conn.cursor_obj)
@@ -255,8 +260,9 @@ def test_huggingface_write_sets_source(monkeypatch):
     assert params[-1] == "huggingface"
 
 
-def test_openrouter_write_sets_source():
+def test_openrouter_write_sets_source(monkeypatch):
     """OpenRouter 侧 upsert 写 source='openrouter'（同样要有 ON CONFLICT SET）。"""
+    monkeypatch.setenv("SCRAPER_BATCH_WRITE", "0")
     conn = FakeConnection()
     record = om.ModelRecord(
         model_id="openai/gpt-4",

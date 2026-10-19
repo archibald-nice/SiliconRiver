@@ -13,6 +13,10 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Dict
 
 import psycopg
+
+from src.scraper.batch_write import chunked as _chunked
+from src.scraper.batch_write import enabled as batch_write_enabled
+from src.scraper.batch_write import size as batch_size
 import requests
 from dotenv import load_dotenv
 from huggingface_hub import HfApi, ModelInfo
@@ -642,7 +646,181 @@ def resolve_case_variant(cursor, model_id: str) -> str | None:
     return existing if existing != model_id else None
 
 
+# 批量 upsert（ISSUE-034）：一批模型用一条语句写完，替代「每模型 3–4 次跨洋往返」。
+# 逐行写实测 1.28–1.33 秒/模型（Supabase 单次往返约 0.26 秒）；本语句 100 行约 1.4 秒、
+# 1000 行约 4.5 秒，拟合为「固定 1.2 秒 + 每行 3.3 毫秒」。
+BATCH_UPSERT_SQL = """
+INSERT INTO models (
+    model_id, provider, model_name, description, tags,
+    created_at, downloads, likes, model_card_url, inserted_at,
+    is_open_source, price, huggingface_rank, source
+)
+SELECT * FROM unnest(
+    %(model_id)s::text[], %(provider)s::text[], %(model_name)s::text[],
+    %(description)s::text[], %(tags)s::text[], %(created_at)s::timestamptz[],
+    %(downloads)s::int4[], %(likes)s::int4[], %(model_card_url)s::text[],
+    %(inserted_at)s::timestamptz[], %(is_open_source)s::bool[],
+    %(price)s::jsonb[], %(huggingface_rank)s::int4[], %(source)s::text[]
+) AS incoming
+ON CONFLICT (model_id) DO UPDATE SET
+    provider = CASE
+        WHEN lower(models.provider) = lower(EXCLUDED.provider) THEN models.provider
+        ELSE EXCLUDED.provider
+    END,
+    model_name = EXCLUDED.model_name,
+    description = EXCLUDED.description,
+    tags = EXCLUDED.tags,
+    created_at = EXCLUDED.created_at,
+    downloads = EXCLUDED.downloads,
+    likes = EXCLUDED.likes,
+    model_card_url = EXCLUDED.model_card_url,
+    -- inserted_at 是「首次入库时间」，不随更新改写（ISSUE-035）
+    is_open_source = EXCLUDED.is_open_source,
+    price = COALESCE(EXCLUDED.price, models.price),
+    huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank),
+    -- 来源只认「首个已知值」（ISSUE-004）
+    source = COALESCE(NULLIF(models.source, 'unknown'), EXCLUDED.source)
+RETURNING (xmax = 0) AS is_insert
+"""
+
+
+def _save_models_batched(
+    conn: psycopg.Connection,
+    provider: str,
+    records: List[ModelRecord],
+    *,
+    started_at: datetime,
+) -> tuple[int, int]:
+    processed = 0
+    inserted = 0
+    for chunk in _chunked(records, batch_size()):
+        with conn.cursor() as cursor:
+            # ① 一次 SELECT 同时拿到「大小写归一的既有 id」与「既有标签」：
+            #    后者用来跳过没变化的标签重写（实测标签重写 1.14 ms/行标签，
+            #    是批量写里最贵的一段，稳定态下绝大多数模型的标签不会变）。
+            cursor.execute(
+                "SELECT model_id, lower(model_id), tags FROM models WHERE lower(model_id) = ANY(%s)",
+                ([record.model_id.lower() for record in chunk],),
+            )
+            existing: Dict[str, str] = {}
+            existing_tags: Dict[str, object] = {}
+            for model_id, lowered, tags in cursor.fetchall():
+                existing[lowered] = model_id
+                try:
+                    existing_tags[lowered] = json.loads(tags) if tags else []
+                except (TypeError, ValueError):
+                    existing_tags[lowered] = None
+
+            # ② 归并到同一 target_id；同一 target 出现多次时后者覆盖前者，
+            #    与逐行写的「后写覆盖先写」一致（否则 ON CONFLICT 会报
+            #    "cannot affect row a second time"）。
+            targets: Dict[str, ModelRecord] = {}
+            for record in chunk:
+                target = existing.get(record.model_id.lower()) or record.model_id
+                targets[target] = record
+            processed += len(chunk)
+
+            # ③ 一条语句写完本批模型
+            cursor.execute(
+                BATCH_UPSERT_SQL,
+                {
+                    "model_id": list(targets.keys()),
+                    "provider": [record.provider for record in targets.values()],
+                    "model_name": [record.model_name for record in targets.values()],
+                    "description": [record.description for record in targets.values()],
+                    "tags": [
+                        json.dumps(record.tags, ensure_ascii=False)
+                        for record in targets.values()
+                    ],
+                    "created_at": [record.created_at for record in targets.values()],
+                    "downloads": [record.downloads for record in targets.values()],
+                    "likes": [record.likes for record in targets.values()],
+                    "model_card_url": [
+                        record.model_card_url for record in targets.values()
+                    ],
+                    "inserted_at": [record.inserted_at for record in targets.values()],
+                    "is_open_source": [
+                        record.is_open_source for record in targets.values()
+                    ],
+                    "price": [
+                        json.dumps(record.price, ensure_ascii=False)
+                        if record.price is not None
+                        else None
+                        for record in targets.values()
+                    ],
+                    "huggingface_rank": [
+                        record.huggingface_rank for record in targets.values()
+                    ],
+                    "source": [SOURCE_HUGGINGFACE] * len(targets),
+                },
+            )
+            inserted += sum(1 for row in cursor.fetchall() if row[0])
+
+            # ④ 标签：只重写「标签真的变了」的模型（标签是「当前快照」）。
+            #    新行的标签必然要写；老行与库里的值相同就跳过，省掉删+插两趟。
+            changed_targets: List[str] = []
+            for target, record in targets.items():
+                lowered = record.model_id.lower()
+                if lowered not in existing:
+                    changed_targets.append(target)  # 新行
+                    continue
+                if existing_tags.get(lowered) != list(record.tags):
+                    changed_targets.append(target)
+            if changed_targets:
+                cursor.execute(
+                    "DELETE FROM model_tags WHERE model_id = ANY(%s)",
+                    (changed_targets,),
+                )
+            tag_ids: List[str] = []
+            tag_names: List[str] = []
+            tag_times: List[datetime] = []
+            for target in changed_targets:
+                record = targets[target]
+                for tag in record.tags:
+                    tag_ids.append(target)
+                    tag_names.append(tag)
+                    tag_times.append(record.inserted_at)
+            if tag_ids:
+                cursor.execute(
+                    """
+                    INSERT INTO model_tags (model_id, tag, inserted_at)
+                    SELECT * FROM unnest(%s::text[], %s::text[], %s::timestamptz[])
+                    ON CONFLICT (model_id, tag) DO NOTHING
+                    """,
+                    (tag_ids, tag_names, tag_times),
+                )
+        # 一批一个事务：整批失败就整批回滚，不留「写了一半」的省份数据
+        conn.commit()
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO sync_log (provider, started_at, finished_at, status, processed, inserted, error_message)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                provider,
+                normalise_datetime(started_at),
+                datetime.now(timezone.utc),
+                "success",
+                processed,
+                inserted,
+                None,
+            ),
+        )
+    conn.commit()
+    return processed, inserted
+
+
 def save_models(conn: psycopg.Connection, provider: str, records: Iterable[ModelRecord], *, started_at: datetime) -> tuple[int, int]:
+    """写一批模型；默认走批量语句，`SCRAPER_BATCH_WRITE=0` 退回逐行写。"""
+    materialised = list(records)
+    if batch_write_enabled():
+        return _save_models_batched(conn, provider, materialised, started_at=started_at)
+    return _save_models_rowwise(conn, provider, materialised, started_at=started_at)
+
+
+def _save_models_rowwise(conn: psycopg.Connection, provider: str, records: List[ModelRecord], *, started_at: datetime) -> tuple[int, int]:
     processed = 0
     inserted = 0
     with conn.cursor() as cursor:

@@ -12,6 +12,10 @@ from typing import Iterable, List, Optional, Dict
 from urllib.parse import quote
 
 import psycopg
+
+from src.scraper.batch_write import chunked as _chunked
+from src.scraper.batch_write import enabled as batch_write_enabled
+from src.scraper.batch_write import size as batch_size
 import requests
 from dotenv import load_dotenv
 
@@ -281,7 +285,130 @@ def to_record(raw: dict) -> ModelRecord:
     )
 
 
+OR_BATCH_UPSERT_SQL = """
+INSERT INTO models (
+    model_id, provider, model_name, description, tags,
+    created_at, downloads, likes, model_card_url, inserted_at,
+    price, is_open_source, huggingface_rank, source, merged_into
+)
+SELECT * FROM unnest(
+    %(model_id)s::text[], %(provider)s::text[], %(model_name)s::text[],
+    %(description)s::text[], %(tags)s::text[], %(created_at)s::timestamptz[],
+    %(downloads)s::int4[], %(likes)s::int4[], %(model_card_url)s::text[],
+    %(inserted_at)s::timestamptz[], %(price)s::jsonb[], %(is_open_source)s::bool[],
+    %(huggingface_rank)s::int4[], %(source)s::text[], %(merged_into)s::text[]
+) AS incoming
+ON CONFLICT (model_id) DO UPDATE SET
+    provider = CASE
+        WHEN lower(models.provider) = lower(EXCLUDED.provider) THEN models.provider
+        ELSE EXCLUDED.provider
+    END,
+    model_name = EXCLUDED.model_name,
+    -- OpenRouter 不提供简介/标签（description 恒空、tags 恒 []）：
+    -- 大小写归一后会写进 HF 那一行，这里必须「空值不覆盖」，
+    -- 否则每天凌晨的 OR 同步都会把 HF 的简介与 license 标签清空。
+    description = CASE
+        WHEN COALESCE(EXCLUDED.description, '') = '' THEN models.description
+        ELSE EXCLUDED.description
+    END,
+    tags = CASE WHEN EXCLUDED.tags = '[]' THEN models.tags ELSE EXCLUDED.tags END,
+    -- 发布时间同理：HF 的是仓库发布日，不能被 OR 的 created 覆盖。
+    created_at = COALESCE(models.created_at, EXCLUDED.created_at),
+    model_card_url = EXCLUDED.model_card_url,
+    -- inserted_at 记首次入库，不随更新改写（ISSUE-035）
+    price = COALESCE(EXCLUDED.price, models.price),
+    is_open_source = EXCLUDED.is_open_source,
+    huggingface_rank = COALESCE(EXCLUDED.huggingface_rank, models.huggingface_rank),
+    merged_into = EXCLUDED.merged_into,
+    -- 来源只认「首个已知值」（ISSUE-004）
+    source = COALESCE(NULLIF(models.source, 'unknown'), EXCLUDED.source)
+RETURNING (xmax = 0) AS is_insert
+"""
+
+
+def _save_models_batched(conn: psycopg.Connection, provider: str, records: List[ModelRecord]) -> tuple[int, int]:
+    """一批模型一条语句写完（ISSUE-034）。
+
+    与 `fetch_models.py` 的同名函数同构，区别：OR 不写标签，但要算 `merged_into`
+    （把这一行挂到同模型的 HF 行后面，ISSUE-004）。
+    """
+    processed = 0
+    inserted = 0
+    for chunk in _chunked(records, batch_size()):
+        with conn.cursor() as cursor:
+            # ① 大小写归一：本批里已在库的 id
+            cursor.execute(
+                "SELECT model_id, lower(model_id) FROM models WHERE lower(model_id) = ANY(%s)",
+                ([record.model_id.lower() for record in chunk],),
+            )
+            existing = {row[1]: row[0] for row in cursor.fetchall()}
+
+            # ② 被合并目标：本批记录的 hf_model_id 在库里有没有对应行
+            hf_ids = [record.hf_model_id.lower() for record in chunk if record.hf_model_id]
+            hf_existing: Dict[str, str] = {}
+            if hf_ids:
+                cursor.execute(
+                    "SELECT model_id, lower(model_id) FROM models WHERE lower(model_id) = ANY(%s)",
+                    (hf_ids,),
+                )
+                hf_existing = {row[1]: row[0] for row in cursor.fetchall()}
+
+            targets: Dict[str, ModelRecord] = {}
+            for record in chunk:
+                target = existing.get(record.model_id.lower()) or record.model_id
+                targets[target] = record
+            processed += len(chunk)
+
+            merged_into: List[Optional[str]] = []
+            for target, record in targets.items():
+                twin = None
+                if record.hf_model_id:
+                    twin = hf_existing.get(record.hf_model_id.lower())
+                if twin and twin.lower() != target.lower():
+                    merged_into.append(twin)
+                else:
+                    merged_into.append(None)
+
+            cursor.execute(
+                OR_BATCH_UPSERT_SQL,
+                {
+                    "model_id": list(targets.keys()),
+                    "provider": [provider for _ in targets],
+                    "model_name": [record.model_name for record in targets.values()],
+                    "description": [record.description for record in targets.values()],
+                    "tags": [json.dumps([], ensure_ascii=False) for _ in targets],
+                    "created_at": [record.created_at for record in targets.values()],
+                    "downloads": [None for _ in targets],
+                    "likes": [None for _ in targets],
+                    "model_card_url": [record.model_card_url for record in targets.values()],
+                    "inserted_at": [record.inserted_at for record in targets.values()],
+                    "price": [
+                        json.dumps(record.price, ensure_ascii=False)
+                        if record.price is not None
+                        else None
+                        for record in targets.values()
+                    ],
+                    "is_open_source": [record.is_open_source for record in targets.values()],
+                    "huggingface_rank": [record.huggingface_rank for record in targets.values()],
+                    "source": [SOURCE_OPENROUTER] * len(targets),
+                    "merged_into": merged_into,
+                },
+            )
+            inserted += sum(1 for row in cursor.fetchall() if row[0])
+        # 一批一个事务：整批失败整批回滚
+        conn.commit()
+    return processed, inserted
+
+
 def save_models(conn: psycopg.Connection, provider: str, records: Iterable[ModelRecord]) -> tuple[int, int]:
+    """写一批模型；默认走批量语句，`SCRAPER_BATCH_WRITE=0` 退回逐行写。"""
+    materialised = list(records)
+    if batch_write_enabled():
+        return _save_models_batched(conn, provider, materialised)
+    return _save_models_rowwise(conn, provider, materialised)
+
+
+def _save_models_rowwise(conn: psycopg.Connection, provider: str, records: List[ModelRecord]) -> tuple[int, int]:
     processed = 0
     inserted = 0
     with conn.cursor() as cursor:
