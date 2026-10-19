@@ -428,7 +428,7 @@ interface ITimelineMode {
 .venv/bin/python -m pytest tests/ -q
 ```
 
-当前基线：`468 passed`，约 22 秒。
+当前基线：`473 passed`，约 22 秒。
 
 - 2026-10-18 之前是 `148 passed, 33 skipped`：`async def` 用例因为 venv 里没有
   `pytest-asyncio` 只发出 `PytestUnhandledCoroutineWarning` 然后被跳过，**从未真正执行过**。
