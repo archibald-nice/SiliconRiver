@@ -47,6 +47,18 @@ def _is_allowed_host(host: object) -> bool:
     return host.startswith("127.") or host.startswith("/")
 
 
+class NetworkAccessBlocked(BaseException):
+    """测试试图访问真实网络时抛这个。
+
+    刻意继承 `BaseException` 而不是 `Exception`：生产代码里到处是
+    `except Exception`（抓取失败要降级、头像拉不到要跳过……），如果守卫只抛
+    RuntimeError，这些兜底会把「测试偷偷连网」吞掉——本地带着 `http_proxy` 时
+    连接走 127.0.0.1 被放行，测试绿；CI 上没有代理，同样的调用直接失败。
+    2026-10-20 CI 连续多次红（`test_fetch_and_store_inserts` 真连 huggingface）
+    就是这么漏过去的。
+    """
+
+
 @pytest.fixture(autouse=True)
 def _deny_external_network(monkeypatch, request):
     if request.node.get_closest_marker("allow_network"):
@@ -60,7 +72,7 @@ def _deny_external_network(monkeypatch, request):
     def _check(address):
         host = address[0] if isinstance(address, tuple) and address else None
         if host is not None and not _is_allowed_host(host):
-            raise RuntimeError(
+            raise NetworkAccessBlocked(
                 f"测试禁止访问真实网络：{address!r}。"
                 "请 mock 掉该调用；确实需要联网时给用例加 @pytest.mark.allow_network"
             )

@@ -121,7 +121,7 @@ bash scripts/daily_sync.sh [--dry-run]                       # 每日同步编�
 .venv/bin/python scripts/check_supabase.py                   # 体检（只读，可安全贴输出）
 ```
 
-测试基线：`475 passed`，约 22 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
+测试基线：`480 passed`，约 22 秒（需 `TEST_DATABASE_URL`，`scripts/dev_db.sh start` 会建好测试库）。
 async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此前 33 个 async 用例一直是被跳过的，
 "全绿"并不覆盖它们。**测试不许依赖真实网络**：mock 漏一个客户端就会变成 70 秒超时 + 回落假数据，
 既慢又不稳定。详解见 ARCHITECTURE.md 第 8 节。
@@ -189,6 +189,21 @@ async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此�
   而屏幕上「已写入」早几行就打印完了。
 - 铁律：**写完先 `commit()` 再打印/复核**；复核用新连接；「计划非空但复核为 0」要非 0 退出。
   同类坑：日志/统计代码不要留在事务里，它们抛异常等于悄悄撤销所有写入。
+
+### 4.9 本机有代理时，测试会「假绿」；CI 会一直红而没人看
+
+- 现象：`pytest` 本机全绿，但 GitHub Actions 的 backend job **从 2026-10-18 起每次都红**，
+  失败点固定是 `test_fetch_models.py::test_fetch_and_store_inserts`。
+- 根因：该用例会真的去连 Hugging Face。本机 shell 里 `http_proxy=127.0.0.1:7890`，
+  连接走回环、被断网守卫放行（守卫只放行 `127.*`）→ 绿；CI 上没有代理，直连外网被拦 → 红。
+  更糟的是生产代码里大量 `except Exception` 兜底，守卫抛的 `RuntimeError` 会被它们吞掉，
+  测试看起来「正常降级」。
+- 修法（本次落地）：
+  1. 该用例补 `resolve_provider_profile` / `download_provider_avatar` 的 mock；
+  2. 守卫改抛 `BaseException` 子类 `NetworkAccessBlocked`，任何 `except Exception` 都吞不掉；
+  3. `tests/test_network_guard.py` 锁住「兜底吞不掉 + 回环仍放行」。
+- 铁律：**push 前看 CI 结果**（`gh run list`）。工作流存在 ≠ 工作流有效；
+  「本机绿」在没有网络的 CI 上可能变红，反之本地代理也会让该红的用例变绿。
 
 ---
 

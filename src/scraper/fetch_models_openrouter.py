@@ -585,6 +585,38 @@ def select_models(
     }
 
 
+def write_sync_log(
+    conn: psycopg.Connection,
+    provider: str,
+    started_at: datetime,
+    processed: int,
+    inserted: int,
+) -> None:
+    """给 OpenRouter 侧补一行审计记录（ISSUE-039）。
+
+    此前只有 Hugging Face 的 save_models 写 `sync_log`，OpenRouter 那条线**一行审计都没有**：
+    它挂了、数据悄悄停更，只能靠「最近怎么没有新模型」察觉。表结构沿用 HF 侧的
+    （provider / started_at / finished_at / status / processed / inserted / error_message）。
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO sync_log (provider, started_at, finished_at, status, processed, inserted, error_message)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                provider,
+                started_at,
+                datetime.now(timezone.utc),
+                "success",
+                processed,
+                inserted,
+                None,
+            ),
+        )
+    conn.commit()
+
+
 def fetch_and_store(endpoint: str | None = None, *, limit: int | None = None) -> dict[str, tuple[int, int]]:
     load_config()
     endpoint_url = endpoint or os.getenv("OPENROUTER_MODELS_URL", DEFAULT_ENDPOINT)
@@ -616,12 +648,15 @@ def fetch_and_store(endpoint: str | None = None, *, limit: int | None = None) ->
                 displays.setdefault(provider_key, provider_display or provider_key)
                 by_provider.setdefault(provider_key, []).append(record)
 
+            provider_started_at = datetime.now(timezone.utc)
             for provider_key, records in by_provider.items():
                 upsert_provider(
                     conn, provider_id=provider_key, display_name=displays[provider_key]
                 )
                 processed, inserted = save_models(conn, provider_key, records)
                 results[provider_key] = (processed, inserted)
+                # ISSUE-039：OpenRouter 也要留审计行，否则这条线挂了没人能看见
+                write_sync_log(conn, provider_key, provider_started_at, processed, inserted)
         timer.stop()
         finished = True
         return results

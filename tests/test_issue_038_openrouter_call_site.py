@@ -51,6 +51,7 @@ def test_records_are_grouped_by_provider(monkeypatch):
         return len(records), 0
 
     monkeypatch.setattr(om, "save_models", fake_save)
+    monkeypatch.setattr(om, "write_sync_log", lambda *a, **k: None)
     monkeypatch.setattr(
         om,
         "upsert_provider",
@@ -74,6 +75,7 @@ def test_provider_upsert_happens_once_per_provider(monkeypatch):
     monkeypatch.setattr(om, "fetch_remote_models", lambda endpoint: list(PAYLOAD))
     monkeypatch.setattr(om, "get_providers", lambda raw: ["acme", "globex"])
     monkeypatch.setattr(om, "ensure_db", lambda: _FakeConn())
+    monkeypatch.setattr(om, "write_sync_log", lambda *a, **k: None)
     monkeypatch.setattr(
         om, "save_models", lambda conn, provider, records: (len(list(records)), 0)
     )

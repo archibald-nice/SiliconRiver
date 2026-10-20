@@ -18,7 +18,7 @@ _中文文档请见 [README-zh.md](README-zh.md)._
 
 - **Filter-First UX** – Time ranges (30d/6m/1y/all), years, providers, text search, and license filters with instant results and model count display.
 
-- **Data Pipeline** – Python scrapers, Hugging Face sync logs, PostgreSQL storage, incremental jobs, and a 475-case backend test suite (see [Testing](#testing)).
+- **Data Pipeline** – Python scrapers, Hugging Face sync logs, PostgreSQL storage, incremental jobs, and a 480-case backend test suite (see [Testing](#testing)).
 
 - **Operational Visibility** – In-process latency/success metrics with text and JSON reports; provider avatar blobs cached in PostgreSQL. No distributed cache or multi-instance metrics aggregation.
 
@@ -36,7 +36,7 @@ flowchart LR
 ```
 
 **Key Components**:
-- **Data Ingestion**: Python scrapers fetch models from Hugging Face and OpenRouter. Hugging Face jobs write a `sync_log` row per run; the OpenRouter jobs currently do not (known gap).
+- **Data Ingestion**: Python scrapers fetch models from Hugging Face and OpenRouter. Both sides write one `sync_log` audit row per provider per run, so a silent stall on either source shows up as a gap in the audit table.
 - **Real-time Web Search**: Optional Brave Search API context for recent announcements and benchmarks; disabled in `.env.example` until a key is configured.
 - **Leaderboard Enrichment**: arena scores are synced from two real sources — LMArena (via the `lmarena-ai/leaderboard-dataset` HF dataset, read as parquet) and SWE-bench (the JSON embedded in `swebench.com`) — by `scripts/sync_arena_scores.py`, which matches leaderboard names onto catalogue `model_id`s and upserts `model_arena_info`. The three legacy in-process clients (SWE-bench / LMSYS Arena / HF Leaderboard) still exist but are disabled by default.
 - **AI Analysis**: DeepSeek LLM generates model descriptions from catalogue data and, when enabled, web/leaderboard context.
@@ -50,7 +50,6 @@ These are deliberate, documented limitations, not claims of completeness:
 - **The legacy leaderboard lookup is off by default** (`ENABLE_LEADERBOARD_LOOKUP=false`). The three upstream clients can take ~70s combined, far beyond the 30s per-model analysis budget; when an upstream fails they now return empty results with a WARNING instead of hard-coded sample rankings (the mocks were removed in `c9327ec`).
 - **Arena sync is a scheduled job, not a request-time lookup.** Scores only move when `scripts/sync_arena_scores.py` runs (weekly on the data-pipeline machine). About a quarter of leaderboard entries still have no catalogue match, so the arena UI is empty for those models.
 - **Ingestion runs once a day, not hourly.** Each model currently costs ~1.3s of database round-trips on write, so a full pass takes about an hour; raising the frequency needs the batch-write change tracked in the local issue archive.
-- **OpenRouter ingestion does not write `sync_log`.** Only the Hugging Face scrapers record runs.
 - **Metrics are per-process.** There is no Redis, no distributed cache, and no aggregation across API instances. `LEADERBOARD_CACHE_TTL` is not read by any code.
 - **The test suite used to hit the real network.** Three leaderboard tests mocked only one of three clients, so the other two attempted live requests, timed out, and fell back to sample data — 206s instead of 0.06s, with order-dependent failures. All clients are mocked now; tests must stay hermetic.
 
@@ -184,7 +183,7 @@ export TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/silicon_river_tes
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The backend suite collects **475 cases and takes about 22 seconds** (`475 passed`).
+The backend suite collects **480 cases and takes about 22 seconds** (`480 passed`).
 
 Two history notes, because both caused real confusion:
 
@@ -209,7 +208,7 @@ frontend/             React + Vite single-page app (Timeline3D, filters)
 scripts/              Database bootstrap and maintenance CLIs
 src/scraper/          Hugging Face and OpenRouter ingestion jobs
 src/analysis/         AI-enhanced analysis (Brave Search, leaderboards, milestone detection)
-tests/                Pytest suite (475 backend cases)
+tests/                Pytest suite (480 backend cases)
 .github/workflows/    CI (backend pytest + frontend build)
 .env.example          Environment variable template
 requirements.txt      Runtime Python dependencies

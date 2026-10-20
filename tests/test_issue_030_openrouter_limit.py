@@ -186,6 +186,7 @@ class _FakeStore:
     def __init__(self) -> None:
         self.saved: list[str] = []
         self.providers: list[str] = []
+        self.audit: list[tuple[str, int, int]] = []
 
     def upsert_provider(self, conn, provider_id, display_name=None, avatar_url=None) -> None:
         self.providers.append(provider_id)
@@ -194,6 +195,9 @@ class _FakeStore:
         records = list(records)
         self.saved.extend(record.model_id for record in records)
         return len(records), len(records)
+
+    def write_sync_log(self, conn, provider, started_at, processed, inserted) -> None:
+        self.audit.append((provider, processed, inserted))
 
 
 @pytest.fixture()
@@ -205,6 +209,8 @@ def patched_pipeline(monkeypatch):
     monkeypatch.setattr(om, "ensure_db", lambda *args, **kwargs: contextlib.nullcontext(object()))
     monkeypatch.setattr(om, "upsert_provider", fake.upsert_provider)
     monkeypatch.setattr(om, "save_models", fake.save_models)
+    # ISSUE-039：每家写完要落一行 sync_log；这里换成记录器，避免碰真库
+    monkeypatch.setattr(om, "write_sync_log", fake.write_sync_log)
     return fake
 
 

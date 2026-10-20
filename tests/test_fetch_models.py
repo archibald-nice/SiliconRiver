@@ -80,6 +80,13 @@ def test_fetch_and_store_inserts(monkeypatch):
             return models
 
     monkeypatch.setattr(fm, "hf_client", lambda: FakeClient())
+    # 这两步会真的连网（HF 机构资料 / 厂商头像）。CI 上没有本机代理，
+    # conftest 的断网守卫会直接抛错——本地能过只是因为 shell 里有 http_proxy
+    # 把连接导向 127.0.0.1（守卫放行回环）。所以必须 mock 掉。
+    monkeypatch.setattr(
+        fm, "resolve_provider_profile", lambda _client, provider: (provider, None)
+    )
+    monkeypatch.setattr(fm, "download_provider_avatar", lambda _url, _token: (None, None))
 
     fm.create_schema(TEST_DB_URL)
     _reset_database()
