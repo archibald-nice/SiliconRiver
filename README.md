@@ -18,7 +18,7 @@ _中文文档请见 [README-zh.md](README-zh.md)._
 
 - **Filter-First UX** – Time ranges (30d/6m/1y/all), years, providers, text search, and license filters with instant results and model count display.
 
-- **Data Pipeline** – Python scrapers, Hugging Face sync logs, PostgreSQL storage, incremental jobs, and a 473-case backend test suite (see [Testing](#testing)).
+- **Data Pipeline** – Python scrapers, Hugging Face sync logs, PostgreSQL storage, incremental jobs, and a 475-case backend test suite (see [Testing](#testing)).
 
 - **Operational Visibility** – In-process latency/success metrics with text and JSON reports; provider avatar blobs cached in PostgreSQL. No distributed cache or multi-instance metrics aggregation.
 
@@ -184,7 +184,7 @@ export TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/silicon_river_tes
 .venv/bin/python -m pytest tests/ -q
 ```
 
-The backend suite collects **473 cases and takes about 22 seconds** (`473 passed`).
+The backend suite collects **475 cases and takes about 22 seconds** (`475 passed`).
 
 Two history notes, because both caused real confusion:
 
@@ -209,7 +209,7 @@ frontend/             React + Vite single-page app (Timeline3D, filters)
 scripts/              Database bootstrap and maintenance CLIs
 src/scraper/          Hugging Face and OpenRouter ingestion jobs
 src/analysis/         AI-enhanced analysis (Brave Search, leaderboards, milestone detection)
-tests/                Pytest suite (473 backend cases)
+tests/                Pytest suite (475 backend cases)
 .github/workflows/    CI (backend pytest + frontend build)
 .env.example          Environment variable template
 requirements.txt      Runtime Python dependencies

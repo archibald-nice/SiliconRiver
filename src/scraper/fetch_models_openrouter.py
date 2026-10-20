@@ -373,7 +373,7 @@ def _save_models_batched(conn: psycopg.Connection, provider: str, records: List[
                 OR_BATCH_UPSERT_SQL,
                 {
                     "model_id": list(targets.keys()),
-                    "provider": [provider for _ in targets],
+                    "provider": [record.provider for record in targets.values()],
                     "model_name": [record.model_name for record in targets.values()],
                     "description": [record.description for record in targets.values()],
                     "tags": [json.dumps([], ensure_ascii=False) for _ in targets],
@@ -465,7 +465,7 @@ def _save_models_rowwise(conn: psycopg.Connection, provider: str, records: List[
                 """,
                 (
                     target_id,
-                    provider,
+                    record.provider,
                     record.model_name,
                     record.description,
                     json.dumps([], ensure_ascii=False),
@@ -603,17 +603,25 @@ def fetch_and_store(endpoint: str | None = None, *, limit: int | None = None) ->
         # 写库段包含 ensure_db()（建表检查 + 建连）与逐条 upsert。
         timer.begin("write")
         with ensure_db() as conn:
+            # ISSUE-038：先按 provider 累积再写。原来每个模型调一次 save_models，
+            # 每模型 3 次往返 + 1 次 commit；改成每家一次后写库段从 7.5 分钟降到秒级。
+            by_provider: Dict[str, List[ModelRecord]] = {}
+            displays: Dict[str, str] = {}
             for item in selected_models:
                 record = to_record(item)
                 provider_key = record.provider
                 provider_display = (item.get("name") or provider_key).split(":", 1)[0].strip()
                 if not provider_display and record.model_id and "/" in record.model_id:
                     provider_display = record.model_id.split("/", 1)[0].strip()
-                provider_display = provider_display or provider_key
-                upsert_provider(conn, provider_id=provider_key, display_name=provider_display)
-                processed, inserted = save_models(conn, provider_key, [record])
-                existing = results.get(provider_key, (0, 0))
-                results[provider_key] = (existing[0] + processed, existing[1] + inserted)
+                displays.setdefault(provider_key, provider_display or provider_key)
+                by_provider.setdefault(provider_key, []).append(record)
+
+            for provider_key, records in by_provider.items():
+                upsert_provider(
+                    conn, provider_id=provider_key, display_name=displays[provider_key]
+                )
+                processed, inserted = save_models(conn, provider_key, records)
+                results[provider_key] = (processed, inserted)
         timer.stop()
         finished = True
         return results
