@@ -87,6 +87,9 @@ def test_fetch_and_store_inserts(monkeypatch):
         fm, "resolve_provider_profile", lambda _client, provider: (provider, None)
     )
     monkeypatch.setattr(fm, "download_provider_avatar", lambda _url, _token: (None, None))
+    # 第三处联网：增量抓取会给「简介为空」的模型去 README 里抽简介
+    # （fetch_descriptions → fetch_model_description → requests.get）。
+    monkeypatch.setattr(fm, "fetch_descriptions", lambda ids, token=None: {})
 
     fm.create_schema(TEST_DB_URL)
     _reset_database()
