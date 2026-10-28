@@ -9,14 +9,12 @@ const App = () => {
   const isDark = theme === "dark";
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-surface-base text-text-primary transition-colors">
+    <div className="app-shell flex h-screen flex-col overflow-hidden bg-surface-base text-text-primary transition-colors">
       <header className="shrink-0 border-b border-border-strong bg-surface-overlay backdrop-blur-md transition-colors">
-        <div className="flex w-full items-center justify-between gap-4 px-6 py-2">
+        <div className="flex w-full items-center justify-between gap-4 px-4 sm:px-6 py-2">
           <div className="flex items-center gap-2">
-            {/* 预留图标空间 */}
-            <div className="h-6 w-6" />
             <div>
-              <h1 className="text-lg font-semibold text-text-primary">硅基长河 · Silicon River</h1>
+              <h1 className="whitespace-nowrap text-sm font-semibold text-text-primary sm:text-lg">硅基长河 · Silicon River</h1>
               <p className="text-xs text-text-muted">大模型发布一站式观察台</p>
             </div>
           </div>
@@ -43,7 +41,7 @@ const App = () => {
           </div>
         </div>
       </header>
-      <main className="flex min-w-0 flex-1 overflow-hidden px-6 py-3">
+      <main className="app-main flex min-w-0 flex-1 overflow-hidden px-3 sm:px-6 py-2">
         <HomeWithAnalysis />
       </main>
       <Footer />

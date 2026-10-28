@@ -1,5 +1,3 @@
-import type { KeyboardEvent } from "react";
-
 import type {
   OpenSourceFilter,
   TimelineFiltersProps,
@@ -39,13 +37,6 @@ export type FilterFieldsProps = TimelineFiltersProps & {
   year: TimelineYearField;
 };
 
-const handleTagKeyPress = (event: KeyboardEvent<HTMLSpanElement>, action: () => void) => {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    action();
-  }
-};
-
 // 可点/可键盘操作的胶囊单选（时间范围与模型授权共用同一套选中态样式）
 const FilterChip = ({
   label,
@@ -58,11 +49,10 @@ const FilterChip = ({
   active: boolean;
   onClick: () => void;
 }) => (
-  <span
-    role="button"
-    tabIndex={0}
+  <button
+    type="button"
+    aria-pressed={active}
     onClick={onClick}
-    onKeyDown={(event) => handleTagKeyPress(event, onClick)}
     className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition cursor-pointer select-none touch-manipulation ${
       active
         ? "border-accent-base bg-accent-base/10 text-accent-base shadow-sm"
@@ -71,7 +61,7 @@ const FilterChip = ({
     title={description}
   >
     {label}
-  </span>
+  </button>
 );
 
 const FilterFields = ({
@@ -94,6 +84,48 @@ const FilterFields = ({
 
   return (
     <div className="space-y-4">
+      <div className="space-y-2">
+        <label
+          htmlFor={modelSearchId}
+          className="block text-xs font-semibold uppercase tracking-wide text-text-muted"
+        >
+          模型名称
+        </label>
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onModelQuerySubmit();
+          }}
+        >
+          <input
+            id={modelSearchId}
+            type="search"
+            value={modelQuery}
+            onChange={(event) => onModelQueryChange(event.target.value)}
+            placeholder="例如：Llama"
+            className="w-full rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none touch-manipulation"
+          />
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="flex-1 rounded-md border border-border-default px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary touch-manipulation"
+            >
+              搜索
+            </button>
+            {modelQuery ? (
+              <button
+                type="button"
+                onClick={onModelQueryClear}
+                className="flex-1 rounded-md border border-transparent px-3 py-2 text-xs text-text-muted transition-colors hover:text-text-primary touch-manipulation"
+              >
+                清空
+              </button>
+            ) : null}
+          </div>
+        </form>
+      </div>
+
       <div>
         <p className="text-xs font-semibold text-text-secondary mb-2">时间范围</p>
         <div className="flex flex-wrap gap-2">
@@ -114,6 +146,7 @@ const FilterFields = ({
         <form className="flex flex-col gap-2 sm:flex-row sm:items-center" onSubmit={year.onYearSubmit}>
           <input
             id={inputId}
+            aria-label="具体年份"
             name="year"
             type="number"
             placeholder="例如 2024"
@@ -196,47 +229,7 @@ const FilterFields = ({
         </div>
       </div>
 
-      <div className="space-y-2 border-t border-border-default pt-4">
-        <label
-          htmlFor={modelSearchId}
-          className="block text-xs font-semibold uppercase tracking-wide text-text-muted"
-        >
-          模型名称
-        </label>
-        <form
-          className="flex flex-col gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onModelQuerySubmit();
-          }}
-        >
-          <input
-            id={modelSearchId}
-            type="search"
-            value={modelQuery}
-            onChange={(event) => onModelQueryChange(event.target.value)}
-            placeholder="例如：Llama"
-            className="w-full rounded-md border border-border-default bg-surface-input px-3 py-2 text-sm text-text-primary transition-colors focus:border-accent-base focus:outline-none touch-manipulation"
-          />
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              className="flex-1 rounded-md border border-border-default px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent-base hover:text-text-primary touch-manipulation"
-            >
-              搜索
-            </button>
-            {modelQuery ? (
-              <button
-                type="button"
-                onClick={onModelQueryClear}
-                className="flex-1 rounded-md border border-transparent px-3 py-2 text-xs text-text-muted transition-colors hover:text-text-primary touch-manipulation"
-              >
-                清空
-              </button>
-            ) : null}
-          </div>
-        </form>
-      </div>
+
     </div>
   );
 };

@@ -45,10 +45,10 @@ export const ModeSwitcher = ({ currentMode, onModeChange, disabled = false }: Mo
             onClick={() => handleModeClick(mode)}
             disabled={disabled || isTransitioning}
             className={`
-              relative rounded-md px-4 py-2 text-sm font-medium transition-all duration-200
+              relative rounded-md px-2 py-2 text-xs sm:px-4 sm:text-sm font-medium transition-all duration-200
               ${
                 isActive
-                  ? "bg-accent-base text-white shadow-md"
+                  ? "bg-accent-base text-accent-contrast"
                   : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
               }
               ${disabled || isTransitioning ? "cursor-not-allowed opacity-50" : "cursor-pointer"}

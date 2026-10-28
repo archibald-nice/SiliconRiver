@@ -9,6 +9,8 @@ import { COLOR_ACTIVE, COLOR_BASE, getDefaultFocusAnchor } from "../core/constan
  * 星轨螺旋模式
  * 模型沿螺旋轨道排列如繁星，向上延伸
  */
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
 export class HelixConstellationMode extends BaseTimelineMode {
   private timelineScene: TimelineScene | null = null;
   private timelineGroup: InstanceType<typeof THREE.Group> | null = null;
@@ -198,7 +200,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
   private createParticleSystem(): void {
     if (!this.timelineGroup) return;
 
-    const particleCount = 1000;
+    const particleCount = 650;
     const positions = new Float32Array(particleCount * 3);
 
     for (let i = 0; i < particleCount; i++) {
@@ -218,7 +220,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
     this.particleMaterial = new THREE.PointsMaterial({
       color: 0xffffff,
       size: 0.15,
-      opacity: 0.6,
+      opacity: 0.3,
       transparent: true,
       sizeAttenuation: true,
     });
@@ -1008,7 +1010,7 @@ export class HelixConstellationMode extends BaseTimelineMode {
 
     // 禁用自动旋转，保持相机稳定
     // this.targetCameraAngle += 0.003;
-    this.cameraAngle += (this.targetCameraAngle - this.cameraAngle) * 0.05;
+    this.cameraAngle += (this.targetCameraAngle - this.cameraAngle) * (reducedMotion.matches ? 1 : 0.05);
 
     // 重新计算目标相机位置（基于当前角度）
     if (this.nodes.length > 0 && this.nodes[this.currentFocusIndex]) {
@@ -1040,8 +1042,8 @@ export class HelixConstellationMode extends BaseTimelineMode {
       maxLerpSpeed
     );
 
-    this.cameraPosition.lerp(this.targetCameraPosition, lerpFactor);
-    this.cameraLookAt.lerp(this.targetLookAt, lerpFactor);
+    this.cameraPosition.lerp(this.targetCameraPosition, reducedMotion.matches ? 1 : lerpFactor);
+    this.cameraLookAt.lerp(this.targetLookAt, reducedMotion.matches ? 1 : lerpFactor);
 
     // 更新相机
     this.camera.position.copy(this.cameraPosition);
@@ -1049,12 +1051,12 @@ export class HelixConstellationMode extends BaseTimelineMode {
     this.camera.updateMatrixWorld(); // 强制更新世界矩阵
 
     // 粒子轻微旋转
-    if (this.particleSystem) {
+    if (this.particleSystem && !reducedMotion.matches) {
       this.particleSystem.rotation.y += 0.0005;
     }
 
     // 发光精灵脉动动画
-    if (this.glowSprite && this.glowSprite.visible) {
+    if (this.glowSprite && this.glowSprite.visible && !reducedMotion.matches) {
       const time = Date.now() * 0.001; // 转换为秒
       const pulse = 1.0 + Math.sin(time * 2.0) * 0.15; // 0.85 - 1.15 之间脉动
       this.glowSprite.scale.set(1.5 * pulse, 1.5 * pulse, 1);
@@ -1064,17 +1066,17 @@ export class HelixConstellationMode extends BaseTimelineMode {
     }
 
     // 更新年份锚点闪烁动画
-    this.updateYearAnchorAnimation();
+    if (!reducedMotion.matches) this.updateYearAnchorAnimation();
 
     // 更新季度锚点闪烁动画
-    this.updateQuarterAnchorAnimation();
+    if (!reducedMotion.matches) this.updateQuarterAnchorAnimation();
 
     // 更新月份锚点闪烁动画
-    this.updateMonthAnchorAnimation();
+    if (!reducedMotion.matches) this.updateMonthAnchorAnimation();
 
     // 更新所有节点的过渡动画
     this.nodes.forEach((entry) => {
-      entry.updateTransition();
+      entry.updateTransition(reducedMotion.matches);
     });
 
     // 不调用 controls.update()，因为我们已经禁用了 OrbitControls

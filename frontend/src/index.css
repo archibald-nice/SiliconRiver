@@ -51,3 +51,18 @@ body {
   color: var(--color-text-primary);
   transition: background-color 200ms ease, color 200ms ease;
 }
+
+/* Shared interaction states across both themes. */
+:focus-visible { outline: 2px solid var(--color-accent) !important; outline-offset: 2px; }
+::selection { background: var(--color-accent-soft); color: var(--color-text-primary); }
+input, select { caret-color: var(--color-accent); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+/* At high zoom or very low window heights, allow the workspace to scroll. */
+@media (max-height: 500px) {
+  .app-shell { height: auto; min-height: 100dvh; overflow: visible; }
+  .app-main { min-height: 440px; overflow: visible; }
+  .timeline-workspace { min-height: 420px; }
+}

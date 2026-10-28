@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueries, useQuery, type QueryObserverResult } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient, type QueryObserverResult } from "@tanstack/react-query";
 
 import {
   buildProviderAvatarUrl,
@@ -27,6 +27,8 @@ type TimelinePagesState = {
   lastPageItemCount: number;
   isFirstPageLoading: boolean;
   isLoadingMore: boolean;
+  firstPageError: boolean;
+  laterPageError: boolean;
 };
 
 // 把已请求的各页 timeline 合并成一份列表（第 1 页在前，其后是「加载更多」追加的页）。
@@ -59,10 +61,13 @@ const mergeTimelinePages = (results: TimelinePageResult[]): TimelinePagesState =
     lastPageItemCount,
     isFirstPageLoading: firstPage ? firstPage.isLoading : true,
     isLoadingMore: results.some((result, index) => index > 0 && result.isLoading),
+    firstPageError: !!firstPage?.isError && !firstPage.data,
+    laterPageError: results.some((result, index) => index > 0 && result.isError),
   };
 };
 
 const HomeWithAnalysis = () => {
+  const queryClient = useQueryClient();
   // Timeline 状态
   const [timelineRange, setTimelineRange] = useState<TimelinePresetRange>("30d");
   const [timelineYear, setTimelineYear] = useState<number | null>(null);
@@ -140,6 +145,8 @@ const HomeWithAnalysis = () => {
     lastPageItemCount,
     isFirstPageLoading,
     isLoadingMore: isTimelineLoadingMore,
+    firstPageError,
+    laterPageError,
   } = timelinePages;
 
   const isTimelineLoading = isFirstPageLoading;
@@ -173,8 +180,28 @@ const HomeWithAnalysis = () => {
     setTimelineLoadedPages((current) => current + 1);
   }, []);
 
+  const resetFilters = () => {
+    rangeBeforeSearchRef.current = null;
+    setTimelineRange("30d"); setTimelineYear(null); setTimelineProvider(null);
+    setTimelineSearchInput(""); setTimelineSearchFilter("");
+    setTimelineOpenSource("all"); setTimelineLoadedPages(1);
+  };
+  const clearSearch = () => {
+    setTimelineSearchFilter(""); setTimelineSearchInput(""); setTimelineLoadedPages(1);
+    const remembered = rangeBeforeSearchRef.current;
+    rangeBeforeSearchRef.current = null;
+    if (remembered !== null) { setTimelineRange(remembered); setTimelineYear(null); }
+  };
+  const retryTimeline = () => { void queryClient.refetchQueries({ queryKey: ["timeline"], type: "active", predicate: (query) => query.state.status === "error" }); };
+  const loadedDates = useMemo(() => {
+    const dates = timelineItems.map((item) => new Date(item.created_at).getTime()).filter(Number.isFinite);
+    if (!dates.length) return null;
+    return `${new Date(Math.min(...dates)).toLocaleDateString()}–${new Date(Math.max(...dates)).toLocaleDateString()}`;
+  }, [timelineItems]);
+  const rangeLabel = timelineYear !== null ? `${timelineYear} 年` : ({ all: "不限", "30d": "近30天", "6m": "近6个月", "1y": "今年" } as const)[timelineRange];
+
   return (
-    <div className="flex w-full min-h-0 flex-1 gap-6 xl:gap-10 relative">
+    <div className="timeline-workspace flex w-full min-h-0 flex-1 gap-4 relative">
       {/* 移动端悬浮菜单按钮 */}
       <MobileFilterButton isOpen={isDrawerOpen} onToggle={setIsDrawerOpen} />
 
@@ -242,14 +269,14 @@ const HomeWithAnalysis = () => {
       />
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors ring-1 ring-blue-200/50 ring-inset">
+        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border-default bg-surface-raised transition-colors">
           {/* 标题 */}
-          <header className="shrink-0 border-b border-border-default px-6 py-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <header className="shrink-0 border-b border-border-default px-4 py-2 sm:px-6 sm:py-3">
+            <div className="flex flex-col gap-2 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <h1 className="text-xl font-semibold text-text-primary">Timeline</h1>
-                <p className="mt-1 text-sm text-accent-base">
-                  滚动或调整右侧筛选器，浏览最新模型节点。
+                <p className="mt-1 hidden text-sm text-text-muted sm:block">
+                  滚动浏览节点，或使用筛选定位模型。
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -261,7 +288,7 @@ const HomeWithAnalysis = () => {
                     onClick={handleLoadMoreTimeline}
                     disabled={!canLoadMoreTimeline || isTimelineLoadingMore}
                     title={
-                      canLoadMoreTimeline
+                      laterPageError ? "追加加载失败，请重试" : canLoadMoreTimeline
                         ? `还有 ${timelineRemaining.toLocaleString()} 个更早发布的模型，点此追加到画布`
                         : "全部模型已加载"
                     }
@@ -269,7 +296,7 @@ const HomeWithAnalysis = () => {
                   >
                     {isTimelineLoadingMore
                       ? "加载中…"
-                      : canLoadMoreTimeline
+                      : laterPageError ? "加载中断" : canLoadMoreTimeline
                         ? `加载更多（剩余 ${timelineRemaining.toLocaleString()} 个）`
                         : `已加载全部 ${timelineTotal.toLocaleString()} 个`}
                   </button>
@@ -283,12 +310,25 @@ const HomeWithAnalysis = () => {
             </div>
           </header>
 
+          <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border-default px-4 py-2 text-xs text-text-secondary" aria-label="当前筛选与结果">
+            <button type="button" onClick={() => { setTimelineRange("30d"); setTimelineYear(null); setTimelineLoadedPages(1); rangeBeforeSearchRef.current = null; }} aria-label="将时间范围重置为近30天">范围：{rangeLabel}{timelineRange !== "30d" || timelineYear !== null ? " ×" : ""}</button>
+            {!firstPageError && !isTimelineLoading && <span>已加载 {timelineItems.length.toLocaleString()} / 匹配 {timelineTotal.toLocaleString()}</span>}
+            {loadedDates && <span>已加载日期：{loadedDates}</span>}
+            {timelineProvider && <button type="button" onClick={() => { setTimelineProvider(null); setTimelineLoadedPages(1); }} aria-label={`清除厂商 ${timelineProvider}`}>厂商：{timelineProvider} ×</button>}
+            {timelineOpenSource !== "all" && <button type="button" onClick={() => { setTimelineOpenSource("all"); setTimelineLoadedPages(1); }}>授权：{timelineOpenSource === "open" ? "开源" : "闭源"} ×</button>}
+            {timelineSearchFilter && <button type="button" onClick={clearSearch} title={`清除搜索：${timelineSearchFilter}`} className="max-w-[11rem] truncate">搜索：{timelineSearchFilter} ×</button>}
+            {(timelineRange !== "30d" || timelineYear !== null || timelineProvider || timelineOpenSource !== "all" || timelineSearchFilter) && <button type="button" onClick={resetFilters} className="text-accent-base">重置筛选</button>}
+          </div>
+          {laterPageError && <div role="alert" className="px-4 py-2 text-xs text-text-secondary">追加加载失败，已加载内容仍可浏览。 <button type="button" className="text-accent-base underline" onClick={retryTimeline}>重试</button></div>}
+
           {/* 内容区域 */}
-          <div className="min-h-0 flex-1 overflow-hidden p-4">
+          <div className="min-h-0 flex-1 overflow-hidden p-2 sm:p-4">
             {isTimelineLoading ? (
               <p className="text-center text-sm text-text-muted">时间轴加载中…</p>
+            ) : firstPageError ? (
+              <div role="alert" className="p-4 text-center text-sm text-text-secondary">时间轴加载失败。 <button type="button" className="text-accent-base underline" onClick={retryTimeline}>重试</button></div>
             ) : timelineItems.length === 0 ? (
-              <p className="text-center text-sm text-text-muted">该范围内暂无模型</p>
+              <div className="p-4 text-center text-sm text-text-secondary">当前筛选没有匹配模型。 <button type="button" className="text-accent-base underline" onClick={resetFilters}>重置筛选</button></div>
             ) : (
               <div className="h-full w-full">
                 <Timeline3D models={timelineItems} mode={timelineMode} />
@@ -299,7 +339,7 @@ const HomeWithAnalysis = () => {
       </section>
 
       {/* 右侧面板 */}
-      <aside className="hidden md:flex md:w-full md:min-w-0 md:flex-col md:xl:w-auto md:xl:flex-none" style={{ maxWidth: "380px" }}>
+      <aside className="hidden md:flex md:w-[300px] md:min-w-0 md:flex-none md:flex-col xl:w-[340px]" style={{ maxWidth: "380px" }}>
         <section className="flex min-h-0 flex-1 w-full flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-raised shadow-lg shadow-accent transition-colors">
           {/* Timeline 过滤器 */}
           <header className="shrink-0 mb-2 space-y-1 px-4 pt-3">
@@ -369,14 +409,14 @@ const HomeWithAnalysis = () => {
             {timelineTotal > 0 && (
               <div className="mt-2 border-t border-border-default pt-2 text-xs text-text-muted">
                 <p>
-                  {`💠 总计：`}
+                  {`匹配：`}
                   <span className="font-semibold text-text-primary">
                     {timelineTotal.toLocaleString()}
                   </span>
                   {` 个模型节点`}
                 </p>
                 <p className="mt-1">
-                  {`已显示：`}
+                  {`已加载：`}
                   <span className="font-semibold text-text-primary">
                     {timelineItems.length.toLocaleString()}
                   </span>

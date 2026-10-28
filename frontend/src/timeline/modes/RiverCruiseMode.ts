@@ -9,6 +9,8 @@ import { COLOR_ACTIVE, COLOR_BASE, getDefaultFocusAnchor } from "../core/constan
  * 河流巡航模式
  * 像乘船游览一样浏览时间线，沿着流动的河道在停靠点间移动
  */
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
 export class RiverCruiseMode extends BaseTimelineMode {
   private timelineScene: TimelineScene | null = null;
   private timelineGroup: InstanceType<typeof THREE.Group> | null = null;
@@ -553,17 +555,17 @@ export class RiverCruiseMode extends BaseTimelineMode {
     if (!this.camera) return;
 
     // 更新相机位置（平滑过渡）
-    this.cameraPosition.lerp(this.targetCameraPosition, 0.05);
-    this.cameraLookAt.lerp(this.targetLookAt, 0.05);
+    this.cameraPosition.lerp(this.targetCameraPosition, reducedMotion.matches ? 1 : 0.05);
+    this.cameraLookAt.lerp(this.targetLookAt, reducedMotion.matches ? 1 : 0.05);
 
     this.camera.position.copy(this.cameraPosition);
     this.camera.lookAt(this.cameraLookAt);
 
     // 更新水流动画 - 通过偏移法线贴图来模拟流动
-    this.riverUvOffset += 0.008; // 提高流动速度 (0.004 → 0.008)
+    if (!reducedMotion.matches) this.riverUvOffset += 0.008; // 提高流动速度 (0.004 → 0.008)
 
     // 实时顶点动画 - 让水面真正波动
-    if (this.riverGeometry && this.originalVertices) {
+    if (!reducedMotion.matches && this.riverGeometry && this.originalVertices) {
       const positionAttribute = this.riverGeometry.getAttribute('position');
       const positions = positionAttribute.array as Float32Array;
       const time = this.riverUvOffset;
@@ -587,7 +589,7 @@ export class RiverCruiseMode extends BaseTimelineMode {
     }
 
     // 法线贴图动画
-    if (this.waterNormalMap) {
+    if (!reducedMotion.matches && this.waterNormalMap) {
       // 设置纹理偏移以创建流动效果
       this.waterNormalMap.offset.x = Math.sin(this.riverUvOffset * 0.5) * 0.1;
       this.waterNormalMap.offset.y = this.riverUvOffset;
@@ -595,7 +597,7 @@ export class RiverCruiseMode extends BaseTimelineMode {
     }
 
     // 材质动画效果
-    if (this.riverMaterial) {
+    if (!reducedMotion.matches && this.riverMaterial) {
       // 波动法线强度 - 增强变化幅度
       const wave = Math.sin(this.riverUvOffset * 5) * 0.7 + 1.8; // 增大振幅
       this.riverMaterial.normalScale.set(wave * 2.5, wave * 2.5);
@@ -619,7 +621,7 @@ export class RiverCruiseMode extends BaseTimelineMode {
 
     // 更新所有节点的过渡动画
     this.nodes.forEach((entry) => {
-      entry.updateTransition();
+      entry.updateTransition(reducedMotion.matches);
     });
 
     // 更新控制器（如果存在）

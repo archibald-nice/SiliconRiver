@@ -230,3 +230,19 @@ async 用例已在 2026-10-18 装上 `pytest-asyncio` 后真正执行——此�
 | 环境变量全表与默认值 | [.env.example](.env.example) |
 | 未修问题的排查档案 | `docs/issues/INDEX.md`（本地，不进仓库） |
 | 项目总览与快速上手 | [README.md](README.md) |
+
+---
+
+## 7. UI 设计技能（本机项目级，2026-10-28）
+
+- **Impeccable 主导 UI，UI UX Pro Max 仅提供查询依据**。本轮未引入 Taste，避免两套视觉规则争夺决策权。
+- Impeccable：`.agents/skills/impeccable` 链接本机维护库的准确技能目录；UI UX Pro Max：官方 `ui-ux-pro-max-cli@2.15.0` 通过 `uipro init --ai universal --offline` 生成 `.agents/skills/ui-ux-pro-max`。两者同时通过 `.workbuddy/skills/` 相对软链提供给 WorkBuddy。
+- 技能、engine 和截图是本机文件，已 gitignore；新机器需重新接入。不要提交绝对软链或二进制。安装器附带的六个非选定技能保存在 `.local/ui-tools/uipro-bundled-extras/`，不参与自动发现；重新初始化时注意它会再次生成它们。
+- 当前 Impeccable 技能为 4.8.0，已验证 engine 为 0.1.18；engine 缓存使用项目内 `.local/ui-tools/impeccable/`，不依赖临时目录。维护库更新后先核对技能和 engine 版本，再决定是否升级。
+- 从仓库根目录验证（不启动服务）：
+  ```bash
+  IMPECCABLE_HOME="$PWD/.local/ui-tools/impeccable" .agents/skills/impeccable/scripts/impeccable engine-probe
+  .venv/bin/python .agents/skills/ui-ux-pro-max/scripts/search.py 'focus not obscured' --domain ux --max-results 1 --json
+  ```
+- 后续实施入口：[UI 打磨计划](docs/ui-polish/IMPLEMENTATION_PLAN.md)、[交给实施 agent 的指令](docs/ui-polish/AGENT_PROMPT.md)。内部文档继续遵守 `docs/` 不入库的约定。
+- 本轮已完成 UI 实现和局部浏览器验收；范围与剩余项见 `docs/ui-polish/ACCEPTANCE.md`。真实 200% 缩放、真机触摸与 GPU 资源趋势仍未验证，不宣称全部验收通过。启动服务仍须取得用户授权。技能扫描器未识别视觉实现不代表项目没有 UI，必须结合 `frontend/src/` 与实际页面判断。

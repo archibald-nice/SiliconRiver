@@ -37,6 +37,7 @@ export class TimelineEventNode {
   private targetOpacity = 1;
   private targetColor: ColorInstance;
   private ownsGeometry: boolean;
+  private disposed = false;
 
   constructor(model: TimelineModel, position: Vector3Instance, options: TimelineEventNodeOptions) {
     this.model = model;
@@ -81,13 +82,13 @@ export class TimelineEventNode {
     }
   }
 
-  updateTransition() {
-    this.currentScale = THREE.MathUtils.lerp(this.currentScale, this.targetScale, 0.2);
+  updateTransition(reducedMotion = false) {
+    this.currentScale = THREE.MathUtils.lerp(this.currentScale, this.targetScale, reducedMotion ? 1 : 0.2);
     this.mesh.scale.setScalar(this.currentScale);
 
-    this.currentOpacity = THREE.MathUtils.lerp(this.currentOpacity, this.targetOpacity, 0.18);
+    this.currentOpacity = THREE.MathUtils.lerp(this.currentOpacity, this.targetOpacity, reducedMotion ? 1 : 0.18);
     this.material.opacity = this.currentOpacity;
-    this.material.color.lerp(this.targetColor, 0.2);
+    this.material.color.lerp(this.targetColor, reducedMotion ? 1 : 0.2);
   }
 
   attachTo(group: GroupInstance) {
@@ -95,6 +96,8 @@ export class TimelineEventNode {
   }
 
   dispose(group?: GroupInstance) {
+    if (this.disposed) return;
+    this.disposed = true;
     if (group) {
       group.remove(this.mesh);
     }

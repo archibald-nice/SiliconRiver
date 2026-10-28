@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { TimelineModel } from "../api/client";
 import { buildProviderAvatarUrl } from "../api/client";
@@ -100,9 +100,14 @@ const buildPreviewMarkup = (model: TimelineModel) => {
 
 const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const modeInstanceRef = useRef<ITimelineMode | null>(null);
-  const animationFrameIdRef = useRef<number>(0);
   const [currentFocusIndex, setCurrentFocusIndex] = useState(0);
+  const [sceneReady, setSceneReady] = useState(false);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [summaryCollapsed, setSummaryCollapsed] = useState(false);
+  const focusModelRef = useRef<string | null>(null);
+  const navigateRef = useRef<(index: number) => void>(() => {});
+  const sortedModels = useMemo(() => [...models].sort((a, b) =>
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()), [models]);
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     (document.documentElement.dataset.theme as 'light' | 'dark') || 'dark'
   );
@@ -110,31 +115,33 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container || models.length === 0) {
-      if (container) container.innerHTML = "";
-      return () => undefined;
-    }
+    const root = containerRef.current;
+    setSceneReady(false);
+    if (!root || models.length === 0) return;
 
-    // 取消标记 - 防止过时的异步回调执行
+    // 每轮 effect 拥有独立容器；过期的异步初始化只能写入已脱离文档的容器。
+    const container = document.createElement("div");
+    container.className = "relative h-full w-full";
+    root.appendChild(container);
     let cancelled = false;
-
-    // 立即清理旧实例
-    if (modeInstanceRef.current) {
-      try {
-        modeInstanceRef.current.dispose();
-      } catch (error) {
-        console.warn("Error disposing previous mode instance:", error);
+    let initialized = false;
+    let disposed = false;
+    let frameId = 0;
+    let errorMessage: HTMLElement | null = null;
+    const bubbleFrames = new Set<number>();
+    const cleanups: Array<() => void> = [];
+    let modeInstance: ITimelineMode | null = null;
+    const cleanup = () => {
+      if (disposed) return;
+      disposed = true;
+      cancelAnimationFrame(frameId);
+      bubbleFrames.forEach(cancelAnimationFrame);
+      for (const dispose of cleanups.reverse()) {
+        try { dispose(); } catch (error) { console.warn("Timeline cleanup failed:", error); }
       }
-      modeInstanceRef.current = null;
-    }
-
-    if (animationFrameIdRef.current) {
-      cancelAnimationFrame(animationFrameIdRef.current);
-      animationFrameIdRef.current = 0;
-    }
-
-    container.innerHTML = "";
+      try { modeInstance?.dispose(); } catch (error) { console.warn("Timeline mode cleanup failed:", error); }
+      container.remove();
+    };
 
     const width = container.clientWidth;
     const height = container.clientHeight;
@@ -157,7 +164,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     // 窄屏（<640px）同时把最小宽度收到 14rem，避免 18rem 占满 390px 视口。
     const focusPrimaryBubble = document.createElement("div");
     focusPrimaryBubble.className =
-      "pointer-events-none inline-block min-w-[14rem] sm:min-w-[18rem] max-w-[calc(100%_-_1.5rem)] rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors select-text";
+      "hidden md:inline-block pointer-events-none w-80 max-w-[calc(100%_-_1.5rem)] rounded-xl border border-border-default bg-surface-overlay px-4 py-3 text-xs text-text-primary shadow-xl shadow-accent transition-colors select-text";
     focusPrimaryBubble.style.position = "absolute";
     focusPrimaryBubble.style.visibility = "hidden";
     focusPrimaryBubble.style.zIndex = "9";
@@ -167,7 +174,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     const createPreviewBubble = () => {
       const bubble = document.createElement("div");
       bubble.className =
-        "pointer-events-none inline-flex min-w-[12rem] max-w-xs items-center gap-2 rounded-lg border border-border-default bg-surface-overlay px-3 py-2 text-[11px] text-text-secondary shadow-lg shadow-accent transition-colors";
+        "hidden md:inline-flex pointer-events-none min-w-[12rem] max-w-xs items-center gap-2 rounded-lg border border-border-default bg-surface-overlay px-3 py-2 text-[11px] text-text-secondary shadow-lg shadow-accent transition-colors";
       bubble.style.position = "absolute";
       bubble.style.visibility = "hidden";
       bubble.style.zIndex = "8";
@@ -182,7 +189,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     // 提示标签
     const createHint = (text: string) => {
       const hint = document.createElement("div");
-      hint.className = "pointer-events-none text-[10px] font-semibold uppercase tracking-wide text-text-muted";
+      hint.className = "hidden md:block pointer-events-none text-[10px] font-semibold uppercase tracking-wide text-text-muted";
       hint.textContent = text;
       hint.style.position = "absolute";
       hint.style.visibility = "hidden";
@@ -212,8 +219,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     // Nearest 快捷按钮
     const nearestButton = document.createElement("button");
     nearestButton.className =
-      "absolute right-3 top-3 z-20 rounded-md border border-blue-700 bg-blue-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-blue-800";
-    nearestButton.textContent = "最近";
+      "hidden md:block absolute right-3 top-3 z-20 rounded-md border border-blue-700 bg-blue-900 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-blue-800";
+    nearestButton.textContent = "跳到最新";
     nearestButton.style.position = "absolute";
     nearestButton.style.right = "12px";
     nearestButton.style.top = "12px";
@@ -226,6 +233,13 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     // 于是 findFathestNode 只能返回下标 0，点了永远跳到第一个节点。
     // 等接口真正返回热度指标（downloads / likes）再恢复这个按钮。
 
+    // 手机画布高度较小时，给投影后的当前节点一个可辨识的焦点环。
+    const mobileFocusRing = document.createElement("div");
+    mobileFocusRing.className = "pointer-events-none absolute z-10 h-5 w-5 rounded-full border-2 border-accent-base md:hidden";
+    mobileFocusRing.setAttribute("aria-hidden", "true");
+    mobileFocusRing.style.visibility = "hidden";
+    container.appendChild(mobileFocusRing);
+
     // SVG 引导线
     const leaderSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     const safeWidth = Number.isFinite(width) ? width : 0;
@@ -233,6 +247,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     leaderSvg.setAttribute("width", `${safeWidth}`);
     leaderSvg.setAttribute("height", `${safeHeight}`);
     leaderSvg.setAttribute("viewBox", `0 0 ${safeWidth} ${safeHeight}`);
+    leaderSvg.setAttribute("class", "hidden md:block");
     leaderSvg.style.position = "absolute";
     leaderSvg.style.top = "0";
     leaderSvg.style.left = "0";
@@ -256,18 +271,18 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
     const currentTheme = theme;
 
     // 创建模式实例
-    let modeInstance: ITimelineMode;
+    let instance: ITimelineMode;
     try {
-      modeInstance = timelineModeFactory.createMode(mode);
-      modeInstanceRef.current = modeInstance;
+      instance = timelineModeFactory.createMode(mode);
+      modeInstance = instance;
     } catch (error) {
       console.error(`Failed to create timeline mode "${mode}":`, error);
-      container.innerHTML = `<div class="flex items-center justify-center h-full text-text-muted">无法加载时间轴模式: ${mode}</div>`;
-      return () => undefined;
+      container.textContent = "无法加载时间轴模式";
+      return () => cleanup();
     }
 
-    // 初始化模式
-    const initPromise = modeInstance.init(
+    // 初始化期间被卸载时，先摘除独立容器，待 Promise 结束后再释放实例。
+    const initPromise = Promise.resolve().then(() => cancelled ? undefined : instance.init(
       {
         container,
         size: { width, height },
@@ -279,16 +294,14 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
         },
       },
       dataset
-    );
+    ));
 
     // 等待初始化完成
     initPromise
       .then(() => {
-        // 检查是否已取消（组件已卸载或models/mode已变化）
-        if (cancelled) {
-          modeInstance.dispose();
-          return;
-        }
+        initialized = true;
+        if (cancelled) { cleanup(); return; }
+        const modeInstance = instance;
 
         const scene = modeInstance.getScene();
         const camera = modeInstance.getCamera();
@@ -297,6 +310,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
         // 创建节点
         const markerGeometry = new THREE.SphereGeometry(0.7, 18, 18);
         const markers: TimelineEventNode[] = [];
+        cleanups.push(() => { markerGeometry.dispose(); markers.forEach((marker) => marker.dispose()); });
 
         sorted.forEach((model) => {
           const created = new Date(model.created_at).getTime();
@@ -328,12 +342,15 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           bubble.style.opacity = "0";
           bubble.style.transform = `translateY(${offset}px) scale(0.92)`;
           void bubble.offsetHeight;
-          requestAnimationFrame(() => {
+          const bubbleFrame = requestAnimationFrame(() => {
+            bubbleFrames.delete(bubbleFrame);
+            if (cancelled) return;
             bubble.style.transition =
               "opacity 260ms cubic-bezier(0.18, 0.72, 0.32, 1), transform 260ms cubic-bezier(0.18, 0.72, 0.32, 1)";
             bubble.style.opacity = "1";
             bubble.style.transform = "translateY(0) scale(1)";
           });
+          bubbleFrames.add(bubbleFrame);
         };
 
         const renderFocusBubbles = (index: number) => {
@@ -374,15 +391,15 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                </div>`
             : `<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border-default bg-avatar-bg text-sm font-semibold text-text-secondary">${escapeHtml(providerInitial)}</div>`;
 
-          const isOpenSource = model.is_open_source !== false;
-          const licenseLabel = isOpenSource ? "开源" : "闭源";
-          const licenseClass = isOpenSource
-            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-            : "bg-rose-500/10 text-rose-400 border border-rose-500/30";
+          const isOpenSource = model.is_open_source;
+          const licenseLabel = isOpenSource === true ? "开源" : isOpenSource === false ? "闭源" : "授权未知";
+          const licenseClass = isOpenSource === true
+            ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/30"
+            : isOpenSource === false ? "bg-rose-500/10 text-rose-500 border border-rose-500/30" : "border border-border-default text-text-secondary";
           const priceTooltipMarkup =
             renderPriceTooltip(model.price) ??
-            (!isOpenSource ? '<div class="text-[11px] text-text-muted">暂无价格信息</div>' : null);
-          const priceIconMarkup = isOpenSource
+            (isOpenSource === false ? '<div class="text-[11px] text-text-muted">暂无价格信息</div>' : null);
+          const priceIconMarkup = isOpenSource !== false
             ? ""
             : '<span class="timeline-license-tooltip inline-flex h-5 w-5 items-center justify-center rounded-full border border-amber-400 bg-amber-500/15 text-[10px] font-semibold text-amber-500 shadow-sm cursor-help" role="img" aria-label="Closed-source pricing info">$</span>';
           const licenseChipMarkup = `<span class="timeline-license-chip inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-medium ${licenseClass}">${licenseLabel}</span>`;
@@ -399,18 +416,21 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 <div class="flex items-start gap-3">
                   ${avatarMarkup}
                   <div class="min-w-0 flex-1">
-                    <div class="text-[11px] font-semibold uppercase tracking-wide text-accent-base">${escapeHtml(model.provider ?? "")}</div>
-                    <div class="mt-1 flex items-center gap-2">
-                      <div class="flex-shrink-0 text-[13px] font-medium text-text-secondary whitespace-nowrap">${escapeHtml(model.model_name)}</div>
-                      ${licenseSectionMarkup}
-                    </div>
+                    <div class="break-words [overflow-wrap:anywhere] text-sm font-semibold text-text-primary">${escapeHtml(model.model_name)}</div>
+                    <div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-text-secondary">${escapeHtml(model.provider ?? "")} ${licenseSectionMarkup}</div>
                   </div>
                 </div>
               </div>
               <div class="text-[11px] text-text-muted">发布时间：${createdAt}</div>
               ${descriptionMarkup}
+              <button type="button" class="timeline-analysis rounded-md border border-border-default px-3 py-2 text-left text-xs font-semibold text-accent-base hover:bg-accent-soft">查看分析</button>
             </div>
           `;
+          const analysisButton = focusPrimaryBubble.querySelector<HTMLButtonElement>(".timeline-analysis");
+          if (analysisButton) analysisButton.onclick = () => {
+            setSelectedModelId(model.model_id);
+            setIsModalOpen(true);
+          };
 
           focusPrimaryBubble.style.visibility = "visible";
 
@@ -493,11 +513,25 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
         // 注册焦点变化回调
         modeInstance.onFocusChanged((index) => {
           setCurrentFocusIndex(index);
+          focusModelRef.current = markers[index]?.model.model_id ?? null;
+          setSummaryExpanded(false);
           renderFocusBubbles(index);
         });
 
-        // 渲染初始焦点
-        renderFocusBubbles(modeInstance.getCurrentFocusIndex());
+        // 模式或数据变化时优先保留原模型；不存在时采用模式默认焦点。
+        const rememberedIndex = markers.findIndex((marker) => marker.model.model_id === focusModelRef.current);
+        const initialIndex = rememberedIndex >= 0 ? rememberedIndex : modeInstance.getCurrentFocusIndex();
+        navigateRef.current = (index) => {
+          if (index < 0 || index >= markers.length) return;
+          lastFocusDirection = index > modeInstance.getCurrentFocusIndex() ? 1 : -1;
+          modeInstance.setFocus(index);
+        };
+        cleanups.push(() => { navigateRef.current = () => {}; });
+        setCurrentFocusIndex(initialIndex);
+        focusModelRef.current = markers[initialIndex]?.model.model_id ?? null;
+        renderFocusBubbles(initialIndex);
+        if (rememberedIndex >= 0) modeInstance.setFocus(initialIndex);
+        setSceneReady(true);
 
         // ==================== 事件处理 ====================
 
@@ -599,7 +633,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
               const summaryMarkup = truncatedSummary
                 ? `<div class="mt-2 pt-2 border-t border-border-default/40">
-                     <div class="text-[9px] px-2 py-1 mb-1.5 rounded bg-yellow-400/15 text-yellow-600 font-semibold">💡 点击查看AI分析</div>
+                     <div class="text-[9px] px-2 py-1 mb-1.5 rounded bg-yellow-400/15 text-yellow-600 font-semibold">点击聚焦模型</div>
                      <div class="text-[10px] text-text-muted line-clamp-3">${escapeHtml(truncatedSummary)}</div>
                    </div>`
                 : '';
@@ -615,12 +649,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
               tooltip.style.top = `${clientY - bounds.top + 14}px`;
               tooltip.style.visibility = "visible";
 
-              // 设置鼠标指针：有分析数据时显示手形
-              if (model.analysis_summary) {
-                renderer.domElement.style.cursor = 'pointer';
-              } else {
-                renderer.domElement.style.cursor = 'default';
-              }
+              renderer.domElement.style.cursor = 'pointer';
             }
           } else {
             renderer.domElement.style.cursor = 'default';
@@ -685,10 +714,10 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
             const mesh = intersects[0].object as InstanceType<typeof THREE.Mesh>;
             const clickedModel = mesh.userData.model as TimelineModel | undefined;
 
-            // 检查是否是模型节点且有分析数据
-            if (clickedModel && clickedModel.analysis_summary) {
-              setSelectedModelId(clickedModel.model_id);
-              setIsModalOpen(true);
+            // 模型节点统一聚焦；分析只由摘要中的明确入口打开。
+            if (clickedModel) {
+              const modelIndex = markers.findIndex((marker) => marker.model.model_id === clickedModel.model_id);
+              if (modelIndex >= 0) navigateRef.current(modelIndex);
               return;
             }
 
@@ -728,25 +757,45 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           }
         };
         nearestButton.addEventListener("click", handleNearest);
+        cleanups.push(() => {
+          renderer.domElement.removeEventListener("pointermove", handlePointerMove);
+          renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
+          renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+          renderer.domElement.removeEventListener("pointerup", handlePointerUp);
+          renderer.domElement.removeEventListener("wheel", handleWheel);
+          nearestButton.removeEventListener("click", handleNearest);
+        });
 
         const handleResize = () => {
-          const newWidth = container.clientWidth;
-          const safeNewWidth = Number.isFinite(newWidth) ? newWidth : 0;
-          const safeH = Number.isFinite(height) ? height : 0;
+          const safeNewWidth = container.clientWidth;
+          const safeH = container.clientHeight;
+          if (safeNewWidth <= 0 || safeH <= 0) return;
           modeInstance.onWindowResize(safeNewWidth, safeH);
           leaderSvg.setAttribute("width", `${safeNewWidth}`);
           leaderSvg.setAttribute("height", `${safeH}`);
           leaderSvg.setAttribute("viewBox", `0 0 ${safeNewWidth} ${safeH}`);
         };
-        window.addEventListener("resize", handleResize);
+        const resizeObserver = new ResizeObserver(handleResize);
+        cleanups.push(() => resizeObserver.disconnect());
+        resizeObserver.observe(container);
+        handleResize();
 
         // ==================== 动画循环 ====================
 
         const focusPosition = new THREE.Vector3();
+        const mobileViewport = window.matchMedia("(max-width: 767px)");
 
         const animate = () => {
           // 更新模式
           modeInstance.update(0);
+
+          // 手机画布为摘要让出空间后，让相机朝向焦点，避免节点落到可视区外。
+          if (mobileViewport.matches && activeMarker) {
+            activeMarker.mesh.getWorldPosition(focusPosition);
+            camera.lookAt(focusPosition);
+          }
+          // 模式可能刚更新相机；投影需使用本帧的世界矩阵。
+          camera.updateMatrixWorld();
 
           // 更新气泡位置
           const viewportWidth = renderer.domElement.clientWidth;
@@ -759,6 +808,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
             if (projected.z < -1 || projected.z > 1) {
               focusPrimaryBubble.style.visibility = "hidden";
+              mobileFocusRing.style.visibility = "hidden";
               leaderSvg.style.visibility = "hidden";
               hidePriceTooltip();
               focusPrevBubble.style.visibility = "hidden";
@@ -768,6 +818,12 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
             } else {
               const screenX = (projected.x * 0.5 + 0.5) * viewportWidth;
               const screenY = (-projected.y * 0.5 + 0.5) * viewportHeight;
+              const ringRadius = 10;
+              const ringVisible = screenX >= ringRadius && screenX <= viewportWidth - ringRadius &&
+                screenY >= ringRadius && screenY <= viewportHeight - ringRadius;
+              mobileFocusRing.style.left = `${screenX - ringRadius}px`;
+              mobileFocusRing.style.top = `${screenY - ringRadius}px`;
+              mobileFocusRing.style.visibility = ringVisible ? "visible" : "hidden";
 
               const padding = 12;
               const primaryOffsets = { x: 78 };
@@ -816,6 +872,9 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
               primaryLeader.setAttribute("y2", `${safeAttrValue(primaryAnchorY)}`);
 
               const primaryRight = Math.min(primaryRect.left + primaryRect.width, viewportWidth - padding);
+              const overlapsPrimary = (left: number, top: number, width: number, height: number) =>
+                left < primaryRect.left + primaryRect.width && left + width > primaryRect.left &&
+                top < primaryRect.top + primaryRect.height && top + height > primaryRect.top;
 
               // 主气泡翻到节点下方时（ISSUE-025：节点靠近画布顶部），预览气泡整体往下排，
               // 否则「上一个」会被放回节点上方、重新盖住被聚焦的节点。
@@ -845,7 +904,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 }
                 focusPrevBubble.style.left = `${prevLeft}px`;
                 focusPrevBubble.style.top = `${prevTop}px`;
-                focusPrevBubble.style.visibility = "visible";
+                const prevOverlaps = overlapsPrimary(prevLeft, prevTop, prevWidth, prevHeight);
+                focusPrevBubble.style.visibility = prevOverlaps ? "hidden" : "visible";
 
                 const hintWidth = nextHintLabel.offsetWidth || 0;
                 const hintHeight = nextHintLabel.offsetHeight || 0;
@@ -855,7 +915,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 if (hintTop < padding) hintTop = padding;
                 nextHintLabel.style.left = `${hintLeft}px`;
                 nextHintLabel.style.top = `${hintTop}px`;
-                nextHintLabel.style.visibility = "visible";
+                nextHintLabel.style.visibility = prevOverlaps ? "hidden" : "visible";
               } else {
                 focusPrevBubble.style.visibility = "hidden";
                 nextHintLabel.style.visibility = "hidden";
@@ -882,7 +942,8 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 if (nextTop < padding) nextTop = padding;
                 focusNextBubble.style.left = `${nextLeft}px`;
                 focusNextBubble.style.top = `${nextTop}px`;
-                focusNextBubble.style.visibility = "visible";
+                const nextOverlaps = overlapsPrimary(nextLeft, nextTop, nextWidth, nextHeight);
+                focusNextBubble.style.visibility = nextOverlaps ? "hidden" : "visible";
 
                 const hintWidth = prevHintLabel.offsetWidth || 0;
                 const hintHeight = prevHintLabel.offsetHeight || 0;
@@ -894,7 +955,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
                 }
                 prevHintLabel.style.left = `${hintLeft}px`;
                 prevHintLabel.style.top = `${hintTop}px`;
-                prevHintLabel.style.visibility = "visible";
+                prevHintLabel.style.visibility = nextOverlaps ? "hidden" : "visible";
               } else {
                 focusNextBubble.style.visibility = "hidden";
                 prevHintLabel.style.visibility = "hidden";
@@ -902,6 +963,7 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
             }
           } else {
             focusPrimaryBubble.style.visibility = "hidden";
+            mobileFocusRing.style.visibility = "hidden";
             leaderSvg.style.visibility = "hidden";
             hidePriceTooltip();
             focusPrevBubble.style.visibility = "hidden";
@@ -911,57 +973,32 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
           }
 
           renderer.render(scene, camera);
-          animationFrameIdRef.current = requestAnimationFrame(animate);
+          frameId = requestAnimationFrame(animate);
         };
 
-        animationFrameIdRef.current = requestAnimationFrame(animate);
+        frameId = requestAnimationFrame(animate);
 
-        // ==================== 清理函数 ====================
-
-        return () => {
-          cancelAnimationFrame(animationFrameIdRef.current);
-          window.removeEventListener("resize", handleResize);
-          renderer.domElement.removeEventListener("pointermove", handlePointerMove);
-          renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
-          renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
-          renderer.domElement.removeEventListener("pointerup", handlePointerUp);
-          renderer.domElement.removeEventListener("wheel", handleWheel);
-          nearestButton.removeEventListener("click", handleNearest);
-
-          tooltip.remove();
-          focusPrimaryBubble.remove();
-          focusPrevBubble.remove();
-          focusNextBubble.remove();
-          nextHintLabel.remove();
-          prevHintLabel.remove();
-          priceTooltip.remove();
-          nearestButton.remove();
-          leaderSvg.remove();
-
-          markerGeometry.dispose();
-          markers.forEach((marker) => marker.dispose(scene as any));
-
-          if (modeInstanceRef.current) {
-            modeInstanceRef.current.dispose();
-            modeInstanceRef.current = null;
-          }
-        };
       })
       .catch((error) => {
-        console.error("Failed to initialize timeline mode:", error);
-        container.innerHTML = `<div class="flex items-center justify-center h-full text-text-muted">初始化时间轴失败</div>`;
+        initialized = true;
+        cleanup();
+        if (!cancelled) {
+          setSceneReady(false);
+          console.error("Failed to initialize timeline mode:", error);
+          const message = document.createElement("div");
+          message.className = "flex h-full items-center justify-center text-text-muted";
+          message.textContent = "初始化时间轴失败";
+          root.appendChild(message);
+          // 当前 effect 的错误提示在下一次清理时移除。
+          errorMessage = message;
+        }
       });
 
-    // 返回清理函数
     return () => {
-      cancelled = true; // 标记为已取消
-      if (animationFrameIdRef.current) {
-        cancelAnimationFrame(animationFrameIdRef.current);
-      }
-      if (modeInstanceRef.current) {
-        modeInstanceRef.current.dispose();
-        modeInstanceRef.current = null;
-      }
+      cancelled = true;
+      errorMessage?.remove();
+      container.remove();
+      if (initialized) cleanup();
     };
   }, [models, mode, theme]);
 
@@ -992,12 +1029,42 @@ const Timeline3D = ({ models, mode = "classic" }: Timeline3DProps) => {
 
   return (
     <>
-      <div ref={containerRef} className="relative h-full w-full" />
+      <div className="relative flex h-full w-full min-h-0 flex-col md:block">
+        <div ref={containerRef} className="relative min-h-0 w-full flex-1 md:h-full" />
+        {sceneReady && sortedModels[currentFocusIndex] && <div className="absolute left-3 top-3 z-20 hidden items-center gap-2 rounded-lg border border-border-default bg-surface-raised px-3 py-2 text-xs text-text-secondary md:flex">
+          <span>当前：{new Date(sortedModels[currentFocusIndex].created_at).toLocaleDateString()}</span>
+          <button type="button" className="rounded px-2 py-1 hover:bg-surface-input disabled:opacity-40" disabled={currentFocusIndex === 0} onClick={() => navigateRef.current(currentFocusIndex - 1)}>← 更早</button>
+          <button type="button" className="rounded px-2 py-1 hover:bg-surface-input disabled:opacity-40" disabled={currentFocusIndex >= sortedModels.length - 1} onClick={() => navigateRef.current(currentFocusIndex + 1)}>更新 →</button>
+        </div>}
+        {sceneReady && sortedModels[currentFocusIndex] && (() => {
+          const model = sortedModels[currentFocusIndex];
+          return (
+            <section aria-label="当前模型摘要" className="z-20 mt-2 max-h-[60%] shrink-0 overflow-y-auto rounded-xl border border-border-default bg-surface-input p-3 text-text-primary shadow-lg md:hidden">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="break-words [overflow-wrap:anywhere] text-sm font-semibold">{model.model_name}</h3>
+                  <p className="mt-1 text-xs text-text-secondary">{model.provider} · {new Date(model.created_at).toLocaleDateString()}</p>
+                </div>
+                <button type="button" className="shrink-0 rounded-md px-2 py-2 text-xs text-text-secondary hover:bg-surface-input" aria-expanded={!summaryCollapsed} onClick={() => setSummaryCollapsed((collapsed) => !collapsed)}>{summaryCollapsed ? "展开" : "收起"}</button>
+              </div>
+              {!summaryCollapsed && <button type="button" className="mt-1 text-xs text-accent-base" aria-expanded={summaryExpanded} onClick={() => setSummaryExpanded((expanded) => !expanded)}>{summaryExpanded ? "收起简介" : "查看简介"}</button>}
+              {!summaryCollapsed && summaryExpanded && <p className="mt-2 max-h-20 overflow-y-auto break-words text-xs text-text-secondary">{model.description || "暂无简介"}</p>}
+              {!summaryCollapsed && <div className="mt-2 flex items-center gap-2">
+                <button type="button" className="min-h-11 min-w-0 flex-1 whitespace-nowrap rounded-md border border-border-default px-1 text-xs disabled:opacity-40" disabled={currentFocusIndex === 0} onClick={() => navigateRef.current(currentFocusIndex - 1)}>上一个</button>
+                <button type="button" className="min-h-11 min-w-0 flex-1 whitespace-nowrap rounded-md border border-border-default px-1 text-xs disabled:opacity-40" disabled={currentFocusIndex >= sortedModels.length - 1} onClick={() => navigateRef.current(currentFocusIndex + 1)}>下一个</button>
+                <button type="button" className="min-h-11 min-w-0 flex-1 whitespace-nowrap rounded-md border border-border-default px-1 text-xs disabled:opacity-40" disabled={currentFocusIndex >= sortedModels.length - 1} onClick={() => navigateRef.current(sortedModels.length - 1)} aria-label="跳到最新">最新</button>
+                <button type="button" className="min-h-11 min-w-0 flex-1 whitespace-nowrap rounded-md bg-accent-base px-1 text-xs font-semibold text-accent-contrast" onClick={() => { setSelectedModelId(model.model_id); setIsModalOpen(true); }}>查看分析</button>
+              </div>}
+            </section>
+          );
+        })()}
+      </div>
       {selectedModelId && (
         <ModelAnalysisModal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           modelId={selectedModelId}
+          modelName={models.find((m) => m.model_id === selectedModelId)?.model_name}
           modelCreatedAt={models.find((m) => m.model_id === selectedModelId)?.created_at ?? null}
         />
       )}

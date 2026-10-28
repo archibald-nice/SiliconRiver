@@ -52,3 +52,12 @@ Thumbs.db
 
 # Claude Code settings (local machine specific)
 .claude/
+
+# 本机项目技能与设计工具：含绝对软链、CLI 生成文件和平台二进制
+.agents/skills/
+.workbuddy/skills/
+.local/ui-tools/
+# 设计决策可单独保留；截图、概念素材和临时构建不进仓库
+.impeccable/review/
+.impeccable/mocks/
+.impeccable/build/

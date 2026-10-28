@@ -9,6 +9,8 @@ import { COLOR_ACTIVE, COLOR_BASE, COLOR_LINE, getDefaultFocusAnchor } from "../
  * 经典螺旋时间轴模式
  * Silicon River 的默认可视化模式
  */
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
 export class ClassicMode extends BaseTimelineMode {
   private timelineScene: TimelineScene | null = null;
   private timelineGroup: InstanceType<typeof THREE.Group> | null = null;
@@ -416,17 +418,17 @@ export class ClassicMode extends BaseTimelineMode {
     }
 
     // 更新时间轴偏移（平滑过渡）
-    this.currentTimelineOffset.lerp(this.targetTimelineOffset, 0.12);
+    this.currentTimelineOffset.lerp(this.targetTimelineOffset, reducedMotion.matches ? 1 : 0.12);
     this.timelineGroup.position.copy(this.currentTimelineOffset);
 
     // 更新相机焦点
-    this.cameraFocus.lerp(this.targetCameraFocus, 0.08);
+    this.cameraFocus.lerp(this.targetCameraFocus, reducedMotion.matches ? 1 : 0.08);
     this.controls.target.copy(this.cameraFocus);
     this.controls.update();
 
     // 更新所有节点的过渡动画
     this.nodes.forEach((entry) => {
-      entry.updateTransition();
+      entry.updateTransition(reducedMotion.matches);
     });
   }
 

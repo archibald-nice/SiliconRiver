@@ -16,7 +16,7 @@ const TimelineFilters = (props: TimelineFiltersProps) => {
   });
 
   return (
-    <div className="hidden md:flex md:flex-col gap-2 rounded-xl border border-border-default bg-surface-raised p-4 text-sm text-text-secondary transition-colors">
+    <div className="hidden md:flex md:flex-col gap-2 bg-surface-raised py-2 text-sm text-text-secondary transition-colors">
       <FilterFields {...props} fieldIds={fieldIds} year={year} />
     </div>
   );

@@ -8,11 +8,12 @@ interface ModelAnalysisModalProps {
   isOpen: boolean;
   onClose: () => void;
   modelId: string;
+  modelName?: string;
   /** 模型的发布时间（models.created_at，UTC ISO 串）；取不到就不显示这一行。 */
   modelCreatedAt?: string | null;
 }
 
-const ModelAnalysisModal = ({ isOpen, onClose, modelId, modelCreatedAt }: ModelAnalysisModalProps) => {
+const ModelAnalysisModal = ({ isOpen, onClose, modelId, modelName, modelCreatedAt }: ModelAnalysisModalProps) => {
   const [avatarError, setAvatarError] = useState(false);
   const { data: analysis, isLoading, error } = useQuery({
     queryKey: ["model-analysis", modelId],
@@ -146,8 +147,8 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId, modelCreatedAt }: ModelA
                         <p className="text-xs font-semibold uppercase tracking-wide text-accent-base">
                           {provider || "unknown"}
                         </p>
-                        <h2 className="mt-1 text-lg font-semibold text-text-primary truncate">
-                          {analysis.model_id.split("/")[1] || analysis.model_id}
+                        <h2 className="mt-1 text-lg font-semibold text-text-primary break-all">
+                          {modelName || analysis.model_id.split("/")[1] || analysis.model_id}
                         </h2>
                       </div>
                     </div>
@@ -221,52 +222,12 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId, modelCreatedAt }: ModelA
 
                       {/* 右栏：里程碑和评分信息 */}
                       <div className="lg:col-span-1 space-y-4">
-                        {/* 里程碑信息 */}
-                        <div className="rounded-lg border border-border-default/40 bg-surface-chip p-4">
-                          <div className="flex items-center gap-2 mb-3">
-                            {analysis.is_milestone ? (
-                              <>
-                                <span className="text-lg">🏆</span>
-                                <h4 className="text-sm font-semibold text-text-primary">里程碑模型</h4>
-                              </>
-                            ) : (
-                              <>
-                                <span className="text-lg">📈</span>
-                                <h4 className="text-sm font-semibold text-text-primary">潜力模型</h4>
-                              </>
-                            )}
+                        {analysis.is_milestone === true && (
+                          <div className="rounded-lg border border-border-default bg-surface-chip p-4">
+                            <h4 className="text-sm font-semibold text-text-primary">里程碑模型</h4>
+                            {analysis.milestone_features && <p className="mt-2 text-sm text-text-secondary">{analysis.milestone_features}</p>}
                           </div>
-
-                          {analysis.is_milestone ? (
-                            <>
-                              <div className="mb-3 rounded-lg bg-amber-900/20 px-3 py-2 border border-amber-600/30">
-                                <p className="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-1">
-                                  里程碑特性
-                                </p>
-                                <p className="text-sm text-text-secondary leading-relaxed">
-                                  {analysis.milestone_features || "行业内具有重要影响力的模型"}
-                                </p>
-                              </div>
-                              <p className="text-xs text-text-muted">
-                                ✓ 该模型在行业内具有突破性的技术贡献或创新能力
-                              </p>
-                            </>
-                          ) : (
-                            <>
-                              <div className="mb-3 rounded-lg bg-blue-900/20 px-3 py-2 border border-blue-600/30">
-                                <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-1">
-                                  发展潜力
-                                </p>
-                                <p className="text-sm text-text-secondary leading-relaxed">
-                                  {analysis.milestone_features || "持续完善中的优秀模型"}
-                                </p>
-                              </div>
-                              <p className="text-xs text-text-muted">
-                                → 关注其后续发展动向
-                              </p>
-                            </>
-                          )}
-                        </div>
+                        )}
 
                         {/* 行业评分 - 占位符 */}
                         <div className="rounded-lg border border-border-default/40 bg-surface-chip p-4">
@@ -275,19 +236,6 @@ const ModelAnalysisModal = ({ isOpen, onClose, modelId, modelCreatedAt }: ModelA
                             <h4 className="text-sm font-semibold text-text-primary">行业评分</h4>
                           </div>
                           <div className="space-y-3">
-                            <div className="rounded-lg bg-surface-default p-3 border border-border-default/40">
-                              <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">
-                                数据源
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                <span className="inline-flex items-center rounded-full bg-slate-700/30 px-2.5 py-1 text-xs font-medium text-slate-300 border border-slate-600/30">
-                                  HuggingFace
-                                </span>
-                              </div>
-                            </div>
-                            {/* ISSUE-001/008：model_arena_info 已有真实数据源（scripts/sync_arena_scores.py
-                                拉 LMArena 与 SWE-bench）。这里接回评分组件：没有数据时它自己会显示
-                                「暂无评分数据」，不会再出现永远转圈的「评分数据加载中…」。 */}
                             <ArenaScoreDisplay modelId={modelId} />
                           </div>
                         </div>

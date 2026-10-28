@@ -22,12 +22,12 @@ const Footer = () => {
   ];
 
   return (
-    <footer className="shrink-0 border-t border-border-default bg-surface-overlay py-3 transition-colors">
+    <footer className="shrink-0 border-t border-border-default bg-surface-overlay py-2 transition-colors">
       {isMobile ? (
         // 移动端：显示 PC 端提示
-        <div className="flex items-center justify-center px-6 py-2">
-          <p className="text-sm text-red-800 font-medium">
-            使用PC端观看效果最佳！
+        <div className="flex items-center justify-center px-4">
+          <p className="text-xs text-text-muted">
+            数据来源：Hugging Face、OpenRouter
           </p>
         </div>
       ) : (
@@ -50,7 +50,7 @@ const Footer = () => {
             </div>
           </div>
           {/* 第二行：保留给公安备案信息的位置 */}
-          <div className="h-4"></div>
+
         </>
       )}
     </footer>
